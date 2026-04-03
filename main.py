@@ -49,14 +49,20 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview")
 GRAPH_SCOPES = ["User.Read", "Mail.Read", "Mail.ReadWrite", "Files.ReadWrite.All", "offline_access"]
 
 if not ENCRYPTION_KEY or not BACKEND_API_SECRET:
-    raise ValueError("🚨 ENCRYPTION_KEY oder BACKEND_API_SECRET fehlt!")
-fernet = Fernet(ENCRYPTION_KEY)
+    print("⚠️ WARNUNG: ENCRYPTION_KEY oder BACKEND_API_SECRET fehlt! Server startet, aber Auth-Funktionen sind deaktiviert.")
+    fernet = None
+else:
+    fernet = Fernet(ENCRYPTION_KEY)
 
 # Gemini Client (API-Key statt Vertex AI)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # Firestore (gleiche DB "bookkeeper", aber Collection "lohn_kunden")
-db = firestore.Client(database="bookkeeper")
+try:
+    db = firestore.Client(database="bookkeeper")
+except Exception as e:
+    print(f"⚠️ Firestore nicht verfügbar: {e}")
+    db = None
 
 # Firebase Admin
 try:
@@ -180,13 +186,13 @@ def verify_api_key(x_api_key: str = Header(...)):
 
 def encrypt_data(data: str) -> str:
     """Verschlüsselt einen String für die Datenbank (AES/Fernet)."""
-    if not data:
+    if not data or not fernet:
         return data
     return fernet.encrypt(data.encode()).decode()
 
 def decrypt_data(data: str) -> Optional[str]:
     """Entschlüsselt einen String aus der Datenbank."""
-    if not data:
+    if not data or not fernet:
         return data
     try:
         return fernet.decrypt(data.encode()).decode()
