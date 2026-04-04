@@ -59,7 +59,7 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # Firestore (gleiche DB "bookkeeper", aber Collection "lohn_kunden")
 try:
-    db = firestore.Client(database="bookkeeper")
+    db = firestore.Client(database="lohnabrechner")
 except Exception as e:
     print(f"⚠️ Firestore nicht verfügbar: {e}")
     db = None
@@ -158,7 +158,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        # TODO: Produktions-Domain hier eintragen
+        "https://ki-lohnabrechner-frontend.calm-frost-00c8.workers.dev",
     ],
     allow_credentials=True,
     allow_methods=["*"],
