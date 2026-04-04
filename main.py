@@ -159,6 +159,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "https://ki-lohnabrechner-frontend.calm-frost-00c8.workers.dev",
+        "https://ki-lohnabrechner-frontend.pages.dev",
     ],
     allow_credentials=True,
     allow_methods=["*"],
