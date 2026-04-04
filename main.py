@@ -14,24 +14,62 @@ import datetime
 import base64
 import re
 import io
-import fitz  # PyMuPDF
-import pytesseract
-from PIL import Image
+
+try:
+    import fitz  # PyMuPDF
+except Exception as e:
+    print(f"⚠️ PyMuPDF nicht verfügbar: {e}")
+    fitz = None
+
+try:
+    import pytesseract
+    from PIL import Image
+except Exception as e:
+    print(f"⚠️ Tesseract/Pillow nicht verfügbar: {e}")
+    pytesseract = None
+
 from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends, Security
-from google import genai
-from google.genai import types
 from pydantic import BaseModel, Field
 from typing import Optional, List, Any
-from google.cloud import firestore
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import RedirectResponse
-from firebase_admin import credentials, auth
-import firebase_admin
-from cryptography.fernet import Fernet
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
+
+try:
+    from google import genai
+    from google.genai import types
+except Exception as e:
+    print(f"⚠️ google-genai nicht verfügbar: {e}")
+    genai = None
+    types = None
+
+try:
+    from google.cloud import firestore
+except Exception as e:
+    print(f"⚠️ Firestore nicht verfügbar: {e}")
+    firestore = None
+
+try:
+    import firebase_admin
+    from firebase_admin import credentials, auth
+except Exception as e:
+    print(f"⚠️ Firebase Admin nicht verfügbar: {e}")
+    firebase_admin = None
+    auth = None
+
+try:
+    from cryptography.fernet import Fernet
+except Exception as e:
+    print(f"⚠️ Fernet nicht verfügbar: {e}")
+    Fernet = None
+
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+except Exception as e:
+    print(f"⚠️ slowapi nicht verfügbar: {e}")
+    Limiter = None
 
 # ==========================================
 # 🔧 GLOBALE KONFIGURATION
@@ -55,20 +93,29 @@ else:
     fernet = Fernet(ENCRYPTION_KEY)
 
 # Gemini Client (API-Key statt Vertex AI)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+gemini_client = None
+if GEMINI_API_KEY and genai:
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print(f"⚠️ Gemini Client Fehler: {e}")
 
-# Firestore (gleiche DB "bookkeeper", aber Collection "lohn_kunden")
-try:
-    db = firestore.Client(database="lohnabrechner")
-except Exception as e:
-    print(f"⚠️ Firestore nicht verfügbar: {e}")
-    db = None
+# Firestore
+db = None
+if firestore:
+    try:
+        db = firestore.Client(database="lohnabrechner")
+    except Exception as e:
+        print(f"⚠️ Firestore nicht verfügbar: {e}")
 
 # Firebase Admin
-try:
-    firebase_admin.initialize_app()
-except ValueError:
-    pass
+if firebase_admin:
+    try:
+        firebase_admin.initialize_app()
+    except ValueError:
+        pass
+    except Exception as e:
+        print(f"⚠️ Firebase Admin Init Fehler: {e}")
 
 security = HTTPBearer()
 
@@ -141,6 +188,11 @@ class VerarbeitungsLog(BaseModel):
 # ==========================================
 app = FastAPI()
 
+@app.get("/")
+def health_check():
+    """Health Check — zeigt ob der Server läuft."""
+    return {"status": "ok", "service": "ki-lohnabrechner-backend", "db": db is not None, "gemini": gemini_client is not None}
+
 def get_real_ip(request: Request):
     """Sicheres Auslesen der Client-IP (Cloud Run)."""
     xff = request.headers.get("x-forwarded-for")
@@ -150,9 +202,10 @@ def get_real_ip(request: Request):
             return ips[-1]
     return request.client.host if request.client else "127.0.0.1"
 
-limiter = Limiter(key_func=get_real_ip)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+if Limiter:
+    limiter = Limiter(key_func=get_real_ip)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
