@@ -134,6 +134,7 @@ class LohnKundenProfil(BaseModel):
     steuerbuero_absender: str
     lexoffice_api_key: Optional[str] = None
     ziel_ordner: Optional[str] = ""
+    onedrive_basispfad: str = "/Personal"
     email_betreff_vorlage: str = "Ihre Gehaltsabrechnung {monat}"
     email_text_vorlage: str = "Anbei Ihre Gehaltsabrechnung für {monat}."
 
@@ -409,6 +410,7 @@ def register_customer(profil: LohnKundenProfil, user_token: dict = Depends(verif
             "steuerbuero_absender": profil.steuerbuero_absender,
             "email_betreff_vorlage": profil.email_betreff_vorlage,
             "email_text_vorlage": profil.email_text_vorlage,
+            "onedrive_basispfad": profil.onedrive_basispfad,
         }
 
         if profil.lexoffice_api_key and profil.lexoffice_api_key != "********":
@@ -721,6 +723,7 @@ async def m365_webhook(request: Request):
                     steuerbuero_absender=STEUERBUERO_ABSENDER,
                     email_betreff=EMAIL_BETREFF,
                     email_text=EMAIL_TEXT,
+                    onedrive_basispfad=kunde.get("onedrive_basispfad", "/Personal"),
                 )
 
         if not pdf_found:
@@ -1098,6 +1101,7 @@ async def process_sammel_pdf(
     steuerbuero_absender: str,
     email_betreff: str,
     email_text: str,
+    onedrive_basispfad: str = "/Personal",
 ):
     """Hauptpipeline: Sammel-PDF zerlegen, zuordnen, ablegen, Entwürfe erstellen."""
     print(f"\n🔄 PIPELINE START: {filename}")
@@ -1173,7 +1177,7 @@ async def process_sammel_pdf(
             unklar += 1
             pdf_einzeln = create_single_pdf(doc, [info.seite])
             unklar_name = f"Unklar_Seite_{info.seite}_{filename}"
-            upload_to_onedrive(access_token, mailbox_email, "Personal/_Unklar", unklar_name, pdf_einzeln)
+            upload_to_onedrive(access_token, mailbox_email, f"{onedrive_basispfad.strip('/')}/_Unklar", unklar_name, pdf_einzeln)
             seiten_details.append(SeitenDetail(
                 seite=info.seite, typ=info.typ, mitarbeiter_name=info.mitarbeiter_name,
                 personal_nr=info.personal_nr, status="unklar",
@@ -1188,7 +1192,7 @@ async def process_sammel_pdf(
         info = data["info"]
         ma_name = ma.get("name", "Unbekannt")
         ma_email = ma.get("email", "")
-        ma_ordner = ma.get("onedrive_ordner", f"/Personal/{ma_name.replace(' ', '_')}")
+        ma_ordner = ma.get("onedrive_ordner", f"{onedrive_basispfad.strip('/')}/{ma_name.replace(' ', '_')}")
         monat = info.abrechnungsmonat or "unbekannt"
 
         try:
@@ -1228,7 +1232,7 @@ async def process_sammel_pdf(
         send_notification_email(access_token, mailbox_email,
             f"{unklar} Abrechnung(en) nicht zugeordnet",
             f"Bei der Verarbeitung von '{filename}' konnten {unklar} Seite(n) keinem Mitarbeiter zugeordnet werden. "
-            f"Die Dateien wurden unter /Personal/_Unklar abgelegt.")
+            f"Die Dateien wurden unter /{onedrive_basispfad.strip('/')}/_Unklar abgelegt.")
 
     doc.close()
 
