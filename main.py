@@ -6,6 +6,15 @@ Architektur identisch zum ki-buchhalter: FastAPI + Cloud Run + Firestore + MSAL 
 """
 
 import os
+import logging
+
+# Strukturiertes Logging für Cloud Run
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s %(asctime)s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%SZ"
+)
+logger = logging.getLogger(__name__)
 import requests
 import msal
 import secrets
@@ -137,6 +146,8 @@ class LohnKundenProfil(BaseModel):
     onedrive_basispfad: str = "/Personal"
     email_betreff_vorlage: str = "Ihre Gehaltsabrechnung {monat}"
     email_text_vorlage: str = "Anbei Ihre Gehaltsabrechnung für {monat}."
+    filter_betreff: List[str] = []   # E-Mail muss einen dieser Begriffe im Betreff enthalten
+    filter_inhalt: List[str] = []    # E-Mail muss einen dieser Begriffe im Body enthalten
 
 class MitarbeiterStamm(BaseModel):
     name: str
@@ -411,6 +422,8 @@ def register_customer(profil: LohnKundenProfil, user_token: dict = Depends(verif
             "email_betreff_vorlage": profil.email_betreff_vorlage,
             "email_text_vorlage": profil.email_text_vorlage,
             "onedrive_basispfad": profil.onedrive_basispfad,
+            "filter_betreff": profil.filter_betreff,
+            "filter_inhalt": profil.filter_inhalt,
         }
 
         if profil.lexoffice_api_key and profil.lexoffice_api_key != "********":
@@ -613,7 +626,7 @@ async def m365_webhook(request: Request):
     if "validationToken" in request.query_params:
         return Response(content=request.query_params["validationToken"], media_type="text/plain", status_code=200)
 
-    print("🔔 LOHN-WEBHOOK EMPFANGEN!")
+    logger.info("🔔 LOHN-WEBHOOK EMPFANGEN!")
     body = await request.json()
 
     for value in body.get("value", []):
@@ -674,15 +687,32 @@ async def m365_webhook(request: Request):
 
         headers = {"Authorization": f"Bearer {token_result['access_token']}", "Content-Type": "application/json"}
 
-        # Absender-Filter prüfen
-        mail_res = requests.get(f"https://graph.microsoft.com/v1.0/{resource_path}?$select=subject,from", headers=headers)
+        # Absender-Filter + Betreff/Inhalt-Filter prüfen
+        mail_res = requests.get(f"https://graph.microsoft.com/v1.0/{resource_path}?$select=subject,from,body", headers=headers)
         if mail_res.status_code == 200:
             mail_data = mail_res.json()
             mail_sender = mail_data.get("from", {}).get("emailAddress", {}).get("address", "").lower()
+            mail_subject = (mail_data.get("subject") or "").lower()
+            mail_body = (mail_data.get("body", {}).get("content") or "").lower()
 
+            # Absender-Filter
             if STEUERBUERO_ABSENDER and mail_sender != STEUERBUERO_ABSENDER:
-                print(f"⏭️ Absender {mail_sender} != {STEUERBUERO_ABSENDER}. Übersprungen.")
+                logger.info(f"⏭️ Absender-Filter: {mail_sender} != {STEUERBUERO_ABSENDER}")
                 continue
+
+            # Betreff-Filter (optional): mindestens einer muss matchen
+            filter_betreff = kunde.get("filter_betreff", [])
+            if filter_betreff:
+                if not any(f.lower() in mail_subject for f in filter_betreff):
+                    logger.info(f"⏭️ Betreff-Filter: kein Match | betreff={mail_subject[:80]}")
+                    continue
+
+            # Inhalt-Filter (optional): mindestens einer muss matchen
+            filter_inhalt = kunde.get("filter_inhalt", [])
+            if filter_inhalt:
+                if not any(f.lower() in mail_body for f in filter_inhalt):
+                    logger.info(f"⏭️ Inhalt-Filter: kein Match")
+                    continue
 
         # PDF-Anhänge laden
         meta_url = f"https://graph.microsoft.com/v1.0/{resource_path}/attachments?$select=id,name,size"
@@ -1104,7 +1134,7 @@ async def process_sammel_pdf(
     onedrive_basispfad: str = "/Personal",
 ):
     """Hauptpipeline: Sammel-PDF zerlegen, zuordnen, ablegen, Entwürfe erstellen."""
-    print(f"\n🔄 PIPELINE START: {filename}")
+    logger.info(f"🔄 PIPELINE START | tenant={tenant_id} | datei={filename}")
 
     seiten_details = []
     erkannte = 0
@@ -1114,23 +1144,34 @@ async def process_sammel_pdf(
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception as e:
-        print(f"❌ PDF nicht lesbar: {e}")
-        send_notification_email(access_token, mailbox_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}")
+        logger.error(f"❌ PDF nicht lesbar | datei={filename} | fehler={e}")
+        try:
+            send_notification_email(access_token, mailbox_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}")
+        except Exception as mail_err:
+            logger.error(f"❌ Info-Mail fehlgeschlagen: {mail_err}")
         write_verarbeitungs_log(tenant_id, filename, 0, 0, 1, 0, "error", f"PDF nicht lesbar: {e}", [])
         return
 
     gesamt_seiten = doc.page_count
-    print(f"  📄 {gesamt_seiten} Seiten")
+    logger.info(f"📄 PDF geöffnet | seiten={gesamt_seiten} | datei={filename}")
 
     # Temporär in OneDrive speichern
-    upload_to_onedrive(access_token, mailbox_email, "_TEMP", filename, pdf_bytes)
+    try:
+        upload_to_onedrive(access_token, mailbox_email, "_TEMP", filename, pdf_bytes)
+        logger.info(f"💾 Temp-Upload OK | pfad=_TEMP/{filename}")
+    except Exception as e:
+        logger.warning(f"⚠️ Temp-Upload fehlgeschlagen (nicht kritisch): {e}")
 
     # Mitarbeiter-Stammdaten laden
     stammdaten = []
-    for ma_doc in db.collection("lohn_kunden").document(tenant_id).collection("mitarbeiter").stream():
-        ma = ma_doc.to_dict()
-        ma["id"] = ma_doc.id
-        stammdaten.append(ma)
+    try:
+        for ma_doc in db.collection("lohn_kunden").document(tenant_id).collection("mitarbeiter").stream():
+            ma = ma_doc.to_dict()
+            ma["id"] = ma_doc.id
+            stammdaten.append(ma)
+        logger.info(f"👥 Stammdaten geladen | anzahl={len(stammdaten)}")
+    except Exception as e:
+        logger.error(f"❌ Stammdaten-Fehler: {e}")
 
     # Seiten verarbeiten und nach Mitarbeiter gruppieren
     seiten_ergebnisse = []
@@ -1140,9 +1181,9 @@ async def process_sammel_pdf(
         try:
             info = process_page(page, page_num)
             seiten_ergebnisse.append(info)
-            print(f"  Seite {page_num}: {info.typ} | {info.mitarbeiter_name or '–'} | PNr: {info.personal_nr or '–'} [{info.quelle}] [{info.validierung}]")
+            logger.info(f"  Seite {page_num}: typ={info.typ} | name={info.mitarbeiter_name or '–'} | pnr={info.personal_nr or '–'} | quelle={info.quelle} | validierung={info.validierung}")
         except Exception as e:
-            print(f"  ❌ Fehler Seite {page_num}: {e}")
+            logger.error(f"❌ Fehler Seite {page_num}: {e}", exc_info=True)
             fehler += 1
             seiten_details.append(SeitenDetail(
                 seite=page_num, typ="fehler", status="fehler",
@@ -1150,7 +1191,7 @@ async def process_sammel_pdf(
             ))
 
     # Nach Mitarbeiter gruppieren (mehrseitige Abrechnungen zusammenfassen)
-    mitarbeiter_seiten: dict[str, list] = {}  # key = personal_nr oder name
+    mitarbeiter_seiten: dict[str, list] = {}
     for info in seiten_ergebnisse:
         if not info.ist_lohnabrechnung:
             seiten_details.append(SeitenDetail(
@@ -1159,7 +1200,6 @@ async def process_sammel_pdf(
             ))
             continue
 
-        # Zuordnung versuchen
         ma = match_mitarbeiter(info.personal_nr, info.mitarbeiter_name, stammdaten)
 
         if ma:
@@ -1172,12 +1212,17 @@ async def process_sammel_pdf(
                 personal_nr=ma.get("personal_nr"), status="zugeordnet",
                 quelle=info.quelle, validierung=info.validierung
             ))
+            logger.info(f"  ✅ Zugeordnet: {info.mitarbeiter_name} → {ma.get('name')} (PNr: {ma.get('personal_nr')})")
         else:
-            # Nicht zuordenbar → /_Unklar
             unklar += 1
-            pdf_einzeln = create_single_pdf(doc, [info.seite])
-            unklar_name = f"Unklar_Seite_{info.seite}_{filename}"
-            upload_to_onedrive(access_token, mailbox_email, f"{onedrive_basispfad.strip('/')}/_Unklar", unklar_name, pdf_einzeln)
+            logger.warning(f"  ⚠️ Nicht zuordenbar: name={info.mitarbeiter_name} | pnr={info.personal_nr}")
+            try:
+                pdf_einzeln = create_single_pdf(doc, [info.seite])
+                unklar_name = f"Unklar_{info.mitarbeiter_name.replace(' ', '_') + '_' if info.mitarbeiter_name else ''}Seite_{info.seite}_{filename}"
+                upload_to_onedrive(access_token, mailbox_email, f"{onedrive_basispfad.strip('/')}/_Unklar", unklar_name, pdf_einzeln)
+                logger.info(f"  💾 Unklar abgelegt: {unklar_name}")
+            except Exception as e:
+                logger.error(f"  ❌ Unklar-Upload fehlgeschlagen: {e}", exc_info=True)
             seiten_details.append(SeitenDetail(
                 seite=info.seite, typ=info.typ, mitarbeiter_name=info.mitarbeiter_name,
                 personal_nr=info.personal_nr, status="unklar",
@@ -1196,55 +1241,76 @@ async def process_sammel_pdf(
         monat = info.abrechnungsmonat or "unbekannt"
 
         try:
-            # Einzel-PDF erzeugen
             pdf_einzeln = create_single_pdf(doc, pages)
             pdf_filename = generate_filename(ma_name, monat)
             erkannte += 1
+            logger.info(f"  📄 Einzel-PDF erzeugt: {pdf_filename} | seiten={pages}")
 
-            # OneDrive Upload
             ordner_pfad = f"{ma_ordner.strip('/')}/Gehaltsabrechnungen"
             upload_result = upload_to_onedrive(access_token, mailbox_email, ordner_pfad, pdf_filename, pdf_einzeln)
 
             if not upload_result:
                 fehler += 1
-                send_notification_email(access_token, mailbox_email,
-                    f"OneDrive-Fehler: {ma_name}",
-                    f"Die Gehaltsabrechnung für {ma_name} konnte nicht in OneDrive abgelegt werden.")
+                logger.error(f"  ❌ OneDrive-Upload fehlgeschlagen: {ma_name}")
+                try:
+                    send_notification_email(access_token, mailbox_email,
+                        f"OneDrive-Fehler: {ma_name}",
+                        f"Die Gehaltsabrechnung für {ma_name} konnte nicht in OneDrive abgelegt werden.")
+                except Exception as mail_err:
+                    logger.error(f"  ❌ Fehler-Mail fehlgeschlagen: {mail_err}")
                 continue
 
-            # E-Mail-Entwurf erstellen
-            if ma_email:
-                monat_display = monat if monat != "unbekannt" else "den aktuellen Monat"
-                betreff = email_betreff.replace("{monat}", monat_display)
-                text = email_text.replace("{monat}", monat_display)
-                create_draft_email(access_token, mailbox_email, ma_email, betreff, text, pdf_einzeln, pdf_filename)
+            logger.info(f"  ✅ OneDrive OK: {ordner_pfad}/{pdf_filename}")
 
-            # Lexoffice Upload
+            if ma_email:
+                try:
+                    monat_display = monat if monat != "unbekannt" else "den aktuellen Monat"
+                    betreff = email_betreff.replace("{monat}", monat_display)
+                    text = email_text.replace("{monat}", monat_display)
+                    create_draft_email(access_token, mailbox_email, ma_email, betreff, text, pdf_einzeln, pdf_filename)
+                    logger.info(f"  ✉️ Entwurf erstellt: {ma_email}")
+                except Exception as e:
+                    logger.error(f"  ❌ Entwurf-Fehler für {ma_name}: {e}", exc_info=True)
+            else:
+                logger.warning(f"  ⚠️ Keine E-Mail für {ma_name} — kein Entwurf erstellt")
+
             if lexoffice_api_key:
-                upload_to_lexoffice(lexoffice_api_key, pdf_einzeln, pdf_filename)
+                try:
+                    upload_to_lexoffice(lexoffice_api_key, pdf_einzeln, pdf_filename)
+                    logger.info(f"  📤 Lexoffice OK: {pdf_filename}")
+                except Exception as e:
+                    logger.error(f"  ❌ Lexoffice-Fehler für {ma_name}: {e}", exc_info=True)
 
         except Exception as e:
-            print(f"  ❌ Fehler bei {ma_name}: {e}")
+            logger.error(f"  ❌ Unerwarteter Fehler bei {ma_name}: {e}", exc_info=True)
             fehler += 1
 
-    # Unklar-Benachrichtigung
     if unklar > 0:
-        send_notification_email(access_token, mailbox_email,
-            f"{unklar} Abrechnung(en) nicht zugeordnet",
-            f"Bei der Verarbeitung von '{filename}' konnten {unklar} Seite(n) keinem Mitarbeiter zugeordnet werden. "
-            f"Die Dateien wurden unter /{onedrive_basispfad.strip('/')}/_Unklar abgelegt.")
+        try:
+            send_notification_email(access_token, mailbox_email,
+                f"{unklar} Abrechnung(en) nicht zugeordnet",
+                f"Bei der Verarbeitung von '{filename}' konnten {unklar} Seite(n) keinem Mitarbeiter zugeordnet werden. "
+                f"Die Dateien wurden unter /{onedrive_basispfad.strip('/')}/_Unklar abgelegt.")
+        except Exception as e:
+            logger.error(f"❌ Unklar-Benachrichtigung fehlgeschlagen: {e}")
 
     doc.close()
 
-    # Temporäre Datei löschen
-    delete_onedrive_file(access_token, mailbox_email, f"_TEMP/{filename}")
+    try:
+        delete_onedrive_file(access_token, mailbox_email, f"_TEMP/{filename}")
+        logger.info(f"🗑️ Temp-Datei gelöscht: _TEMP/{filename}")
+    except Exception as e:
+        logger.warning(f"⚠️ Temp-Datei konnte nicht gelöscht werden: {e}")
 
-    # Verarbeitungs-Log schreiben
     status = "success" if fehler == 0 and unklar == 0 else ("error" if erkannte == 0 else "partial")
     message = f"{erkannte} Mitarbeiter verarbeitet, {fehler} Fehler, {unklar} nicht zugeordnet"
-    write_verarbeitungs_log(tenant_id, filename, gesamt_seiten, erkannte, fehler, unklar, status, message, seiten_details)
+    
+    try:
+        write_verarbeitungs_log(tenant_id, filename, gesamt_seiten, erkannte, fehler, unklar, status, message, seiten_details)
+    except Exception as e:
+        logger.error(f"❌ Log-Schreiben fehlgeschlagen: {e}", exc_info=True)
 
-    print(f"✅ PIPELINE FERTIG: {message}")
+    logger.info(f"✅ PIPELINE FERTIG | status={status} | {message}")
 
 
 # ==========================================
