@@ -133,7 +133,7 @@ class LohnKundenProfil(BaseModel):
     mailbox_email: str
     steuerbuero_absender: str
     lexoffice_api_key: Optional[str] = None
-    ziel_ordner: str = "Posteingang"
+    ziel_ordner: Optional[str] = ""
     email_betreff_vorlage: str = "Ihre Gehaltsabrechnung {monat}"
     email_text_vorlage: str = "Anbei Ihre Gehaltsabrechnung für {monat}."
 
@@ -298,10 +298,16 @@ def setup_m365_webhook(tenant_id: str, mailbox_email: str, access_token: str, zi
     WEBHOOK_URL = f"{BACKEND_URL}/webhook/m365"
     new_expire = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
+    # Resource-Pfad: Mit oder ohne Ordner-Filter
+    if ziel_ordner:
+        resource = f"users/{mailbox_email}/mailFolders('{ziel_ordner}')/messages?$filter=hasAttachments eq true"
+    else:
+        resource = f"users/{mailbox_email}/messages?$filter=hasAttachments eq true"
+
     post_payload = {
         "changeType": "created",
         "notificationUrl": WEBHOOK_URL,
-        "resource": f"users/{mailbox_email}/mailFolders('{ziel_ordner}')/messages?$filter=hasAttachments eq true",
+        "resource": resource,
         "expirationDateTime": new_expire,
         "clientState": sicherer_client_state
     }
@@ -375,7 +381,7 @@ def microsoft_callback(code: str, state: str):
         pf_ref = db.collection("lohn_kunden").document(tenant_id).collection("postfaecher").document(mailbox_email)
         pf_ref.update({"m365_refresh_token": encrypt_data(refresh_token)})
 
-        ziel_ordner = pf_ref.get().to_dict().get("ziel_ordner", "Posteingang")
+        ziel_ordner = pf_ref.get().to_dict().get("ziel_ordner", "")
         setup_m365_webhook(tenant_id, mailbox_email, access_token, ziel_ordner)
 
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?success=true")
