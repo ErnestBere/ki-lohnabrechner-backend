@@ -1,4 +1,4 @@
-"""
+﻿"""
 KI-Lohnabrechner Backend
 ========================
 Automatisiert die Verarbeitung von Sammel-PDFs mit Gehaltsabrechnungen.
@@ -27,14 +27,14 @@ import io
 try:
     import fitz  # PyMuPDF
 except Exception as e:
-    print(f"⚠️ PyMuPDF nicht verfügbar: {e}")
+    logger.warning(f"⚠️ PyMuPDF nicht verfügbar: {e}")
     fitz = None
 
 try:
     import pytesseract
     from PIL import Image
 except Exception as e:
-    print(f"⚠️ Tesseract/Pillow nicht verfügbar: {e}")
+    logger.warning(f"⚠️ Tesseract/Pillow nicht verfügbar: {e}")
     pytesseract = None
 
 from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends, Security
@@ -48,28 +48,28 @@ try:
     from google import genai
     from google.genai import types
 except Exception as e:
-    print(f"⚠️ google-genai nicht verfügbar: {e}")
+    logger.warning(f"⚠️ google-genai nicht verfügbar: {e}")
     genai = None
     types = None
 
 try:
     from google.cloud import firestore
 except Exception as e:
-    print(f"⚠️ Firestore nicht verfügbar: {e}")
+    logger.warning(f"⚠️ Firestore nicht verfügbar: {e}")
     firestore = None
 
 try:
     import firebase_admin
     from firebase_admin import credentials, auth
 except Exception as e:
-    print(f"⚠️ Firebase Admin nicht verfügbar: {e}")
+    logger.warning(f"⚠️ Firebase Admin nicht verfügbar: {e}")
     firebase_admin = None
     auth = None
 
 try:
     from cryptography.fernet import Fernet
 except Exception as e:
-    print(f"⚠️ Fernet nicht verfügbar: {e}")
+    logger.warning(f"⚠️ Fernet nicht verfügbar: {e}")
     Fernet = None
 
 try:
@@ -77,7 +77,7 @@ try:
     from slowapi.util import get_remote_address
     from slowapi.errors import RateLimitExceeded
 except Exception as e:
-    print(f"⚠️ slowapi nicht verfügbar: {e}")
+    logger.warning(f"⚠️ slowapi nicht verfügbar: {e}")
     Limiter = None
 
 # ==========================================
@@ -96,7 +96,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview")
 GRAPH_SCOPES = ["User.Read", "Mail.Read", "Mail.ReadWrite", "Files.ReadWrite.All"]
 
 if not ENCRYPTION_KEY or not BACKEND_API_SECRET:
-    print("⚠️ WARNUNG: ENCRYPTION_KEY oder BACKEND_API_SECRET fehlt! Server startet, aber Auth-Funktionen sind deaktiviert.")
+    logger.warning("⚠️ WARNUNG: ENCRYPTION_KEY oder BACKEND_API_SECRET fehlt! Server startet, aber Auth-Funktionen sind deaktiviert.")
     fernet = None
 else:
     fernet = Fernet(ENCRYPTION_KEY)
@@ -107,7 +107,7 @@ if GEMINI_API_KEY and genai:
     try:
         gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
-        print(f"⚠️ Gemini Client Fehler: {e}")
+        logger.warning(f"⚠️ Gemini Client Fehler: {e}")
 
 # Firestore
 db = None
@@ -115,7 +115,7 @@ if firestore:
     try:
         db = firestore.Client(database="lohnabrechner")
     except Exception as e:
-        print(f"⚠️ Firestore nicht verfügbar: {e}")
+        logger.warning(f"⚠️ Firestore nicht verfügbar: {e}")
 
 # Firebase Admin
 if firebase_admin:
@@ -124,7 +124,7 @@ if firebase_admin:
     except ValueError:
         pass
     except Exception as e:
-        print(f"⚠️ Firebase Admin Init Fehler: {e}")
+        logger.warning(f"⚠️ Firebase Admin Init Fehler: {e}")
 
 security = HTTPBearer()
 
@@ -243,7 +243,7 @@ def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Security(s
         decoded_token = auth.verify_id_token(token)
         return decoded_token
     except Exception as e:
-        print(f"🚨 JWT Fehler: {e}")
+        logger.error(f"🚨 JWT Fehler: {e}")
         raise HTTPException(status_code=401, detail="Ungültiger oder abgelaufener Token")
 
 def verify_api_key(x_api_key: str = Header(...)):
@@ -264,7 +264,7 @@ def decrypt_data(data: str) -> Optional[str]:
     try:
         return fernet.decrypt(data.encode()).decode()
     except Exception as e:
-        print(f"🚨 Verschlüsselungs-Fehler: {e}")
+        logger.error(f"🚨 Verschlüsselungs-Fehler: {e}")
         return None
 
 def get_delegated_token(tenant_id: str, refresh_token: str):
@@ -278,7 +278,7 @@ def handle_token_error(token_result: dict, tenant_id: str, mailbox_email: str):
     if "error" in token_result:
         error_code = token_result.get("error")
         if error_code in ["invalid_grant", "interaction_required"]:
-            print(f"🚨 AUTH-FEHLER: Token für {mailbox_email} (Tenant: {tenant_id}) abgelaufen!")
+            logger.error(f"🚨 AUTH-FEHLER: Token für {mailbox_email} (Tenant: {tenant_id}) abgelaufen!")
             try:
                 db.collection("lohn_kunden").document(tenant_id).collection("postfaecher").document(mailbox_email).update({
                     "auth_status": "disconnected",
@@ -286,7 +286,7 @@ def handle_token_error(token_result: dict, tenant_id: str, mailbox_email: str):
                     "disconnected_at": firestore.SERVER_TIMESTAMP
                 })
             except Exception as e:
-                print(f"Fehler beim Update des Auth-Status: {e}")
+                logger.error(f"Fehler beim Update des Auth-Status: {e}")
         return True
     return False
 
@@ -336,7 +336,7 @@ def setup_m365_webhook(tenant_id: str, mailbox_email: str, access_token: str, zi
         })
         return True
     else:
-        print(f"🚨 MICROSOFT WEBHOOK FEHLER: {sub_res.text}")
+        logger.error(f"🚨 MICROSOFT WEBHOOK FEHLER: {sub_res.text}")
         return False
 
 
@@ -351,7 +351,7 @@ async def create_firebase_token(req: FirebaseAuthRequest):
     res = requests.get("https://graph.microsoft.com/v1.0/me", headers=headers)
 
     if res.status_code != 200:
-        print(f"🚨 MS Token ungültig: {res.text}")
+        logger.error(f"🚨 MS Token ungültig: {res.text}")
         raise HTTPException(status_code=401, detail="Ungültiger Microsoft Token")
 
     ms_user = res.json()
@@ -364,7 +364,7 @@ async def create_firebase_token(req: FirebaseAuthRequest):
         )
         return {"firebase_token": custom_token.decode("utf-8")}
     except Exception as e:
-        print(f"🚨 Firebase Token Fehler: {e}")
+        logger.error(f"🚨 Firebase Token Fehler: {e}")
         raise HTTPException(status_code=500, detail="Interner Auth-Fehler")
 
 
@@ -385,7 +385,7 @@ def microsoft_callback(code: str, state: str):
         )
 
         if "error" in token_result:
-            print(f"🚨 Auth-Fehler: {token_result.get('error_description')}")
+            logger.error(f"🚨 Auth-Fehler: {token_result.get(\"error_description\")}")
             return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?error=auth_failed")
 
         access_token = token_result["access_token"]
@@ -461,7 +461,7 @@ def register_customer(profil: LohnKundenProfil, user_token: dict = Depends(verif
         return {"status": "auth_required", "auth_url": auth_url}
 
     except Exception as e:
-        print(f"❌ INTERNER FEHLER in /register: {e}")
+        logger.error(f"❌ INTERNER FEHLER in /register: {e}", exc_info=True)
         return Response(content="Ein interner Serverfehler ist aufgetreten.", status_code=500)
 
 
@@ -503,10 +503,10 @@ def renew_webhooks(api_key_check: None = Depends(verify_api_key)):
                 if res.status_code == 200:
                     renewed += 1
                 else:
-                    print(f"⚠️ Webhook-Verlängerung fehlgeschlagen für {pf_doc.id}: {res.text}")
+                    logger.warning(f"⚠️ Webhook-Verlängerung fehlgeschlagen für {pf_doc.id}: {res.text}")
                     errors += 1
             except Exception as e:
-                print(f"❌ Fehler bei Webhook-Verlängerung: {e}")
+                logger.error(f"❌ Fehler bei Webhook-Verlängerung: {e}")
                 errors += 1
 
     return {"renewed": renewed, "errors": errors}
@@ -643,7 +643,7 @@ async def m365_webhook(request: Request):
         # Duplikat-Schutz
         mail_doc_ref = db.collection("lohn_processed_mails").document(message_id)
         if mail_doc_ref.get().exists:
-            print("⏭️ Mail bereits verarbeitet.")
+            logger.info("⏭️ Mail bereits verarbeitet.")
             continue
 
         mail_doc_ref.set({"status": "processing", "received_at": firestore.SERVER_TIMESTAMP})
@@ -659,13 +659,13 @@ async def m365_webhook(request: Request):
             break
 
         if not postfach:
-            print("⚠️ Kein passendes Postfach gefunden.")
+            logger.warning("⚠️ Kein passendes Postfach gefunden.")
             continue
 
         # clientState-Validierung
         erwarteter_state = postfach.get("client_state")
         if erwarteter_state and incoming_client_state != erwarteter_state:
-            print(f"🚨 SICHERHEITSWARNUNG: Falscher clientState! Webhook ignoriert.")
+            logger.error(f"🚨 SICHERHEITSWARNUNG: Falscher clientState! Webhook ignoriert.")
             continue
 
         # Tenant-Daten laden
@@ -734,11 +734,11 @@ async def m365_webhook(request: Request):
             MAX_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
 
             if att_size > MAX_SIZE_BYTES:
-                print(f"🛡️ PDF zu groß: {filename} ({att_size / 1024 / 1024:.1f} MB)")
+                logger.warning(f"🛡️ PDF zu groß: {filename} ({att_size / 1024 / 1024:.1f} MB)")
                 # TODO: Info-Mail an Thomas (Task 7.2)
                 continue
 
-            print(f"⬇️ Lade '{filename}' ({att_size / 1024 / 1024:.2f} MB)...")
+            logger.info(f"⬇️ Lade '{filename}' ({att_size / 1024 / 1024:.2f} MB)...")
             content_url = f"https://graph.microsoft.com/v1.0/{resource_path}/attachments/{att_id}"
             content_res = requests.get(content_url, headers=headers)
             pdf_base64 = content_res.json().get("contentBytes")
@@ -761,11 +761,12 @@ async def m365_webhook(request: Request):
                 )
 
         if not pdf_found:
-            print("⚠️ Keine PDF-Anhänge gefunden.")
+            logger.warning("⚠️ Keine PDF-Anhänge gefunden.")
             send_notification_email(
-                token_result["access_token"], BENACHRICHTIGUNGS_EMAIL,
-                "KI-Lohnabrechner: Kein PDF-Anhang",
-                "Eine E-Mail vom Steuerbüro wurde empfangen, enthielt aber keinen PDF-Anhang."
+                token_result["access_token"], MAILBOX_EMAIL,
+                "Kein PDF-Anhang",
+                "Eine E-Mail vom Steuerbüro wurde empfangen, enthielt aber keinen PDF-Anhang.",
+                to_email=BENACHRICHTIGUNGS_EMAIL
             )
 
         # Status aktualisieren
@@ -898,7 +899,7 @@ def validate_with_gemini(page_bytes: bytes, page_num: int) -> GeminiSeitenInfo |
         )
         return GeminiSeitenInfo.model_validate_json(response.text)
     except Exception as e:
-        print(f"⚠️ Gemini-Fehler Seite {page_num}: {e}")
+        logger.warning(f"⚠️ Gemini-Fehler Seite {page_num}: {e}")
         return None
 
 
@@ -1038,10 +1039,10 @@ def upload_to_onedrive(access_token: str, user_email: str, folder_path: str, fil
     res = requests.put(upload_url, headers={**headers, "Content-Type": "application/pdf"}, data=content)
 
     if res.status_code in [200, 201]:
-        print(f"  📁 OneDrive: {folder_path}/{filename} hochgeladen.")
+        logger.info(f"  📁 OneDrive: {folder_path}/{filename} hochgeladen.")
         return res.json()
     else:
-        print(f"  ❌ OneDrive Upload fehlgeschlagen: {res.status_code} {res.text[:200]}")
+        logger.error(f"  ❌ OneDrive Upload fehlgeschlagen: {res.status_code} {res.text[:200]}")
         return None
 
 
@@ -1071,25 +1072,30 @@ def create_draft_email(access_token: str, user_email: str, to_email: str, subjec
     res = requests.post(f"https://graph.microsoft.com/v1.0/users/{user_email}/messages", headers=headers, json=payload)
 
     if res.status_code == 201:
-        print(f"  ✉️ Entwurf erstellt für {to_email}")
+        logger.info(f"  ✉️ Entwurf erstellt für {to_email}")
         return res.json()
     else:
-        print(f"  ❌ Entwurf fehlgeschlagen: {res.status_code} {res.text[:200]}")
+        logger.error(f"  ❌ Entwurf fehlgeschlagen: {res.status_code} {res.text[:200]}")
         return None
 
 
-def send_notification_email(access_token: str, user_email: str, subject: str, body: str):
-    """Sendet eine Info-/Fehler-Mail an den Benutzer selbst."""
+def send_notification_email(access_token: str, mailbox_email: str, subject: str, body: str, to_email: str | None = None):
+    """Sendet eine Info-/Fehler-Mail. Gesendet von mailbox_email, an to_email (oder mailbox_email falls leer)."""
+    recipient = to_email or mailbox_email
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
     payload = {
         "message": {
             "subject": f"[KI-Lohnabrechner] {subject}",
             "body": {"contentType": "HTML", "content": body},
-            "toRecipients": [{"emailAddress": {"address": user_email}}]
+            "toRecipients": [{"emailAddress": {"address": recipient}}]
         },
         "saveToSentItems": True
     }
-    requests.post(f"https://graph.microsoft.com/v1.0/users/{user_email}/sendMail", headers=headers, json=payload)
+    res = requests.post(f"https://graph.microsoft.com/v1.0/users/{mailbox_email}/sendMail", headers=headers, json=payload)
+    if res.status_code not in [200, 202]:
+        logger.error(f"❌ Benachrichtigungs-Mail fehlgeschlagen: {res.status_code} {res.text[:300]}")
+    else:
+        logger.info(f"📧 Benachrichtigungs-Mail gesendet an {recipient}: {subject}")
 
 
 # ==========================================
@@ -1099,7 +1105,7 @@ def send_notification_email(access_token: str, user_email: str, subject: str, bo
 def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str) -> dict | None:
     """Lädt ein Dokument als 'Sonstiges' in Lexoffice hoch."""
     if not api_key:
-        print("  ⏭️ Kein Lexoffice API-Key — Upload übersprungen.")
+        logger.info("  ⏭️ Kein Lexoffice API-Key — Upload übersprungen.")
         return None
 
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
@@ -1109,14 +1115,14 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str) -> dict |
     for attempt in range(3):
         res = requests.post("https://api.lexoffice.io/v1/files", headers=headers, files=files, data=data)
         if res.status_code == 202:
-            print(f"  📤 Lexoffice: {filename} hochgeladen.")
+            logger.info(f"  📤 Lexoffice: {filename} hochgeladen.")
             return res.json()
         elif res.status_code == 429:
-            print(f"  ⏳ Lexoffice Rate Limit — Warte 3s (Versuch {attempt + 1}/3)")
+            logger.warning(f"  ⏳ Lexoffice Rate Limit — Warte 3s (Versuch {attempt + 1}/3)")
             import time
             time.sleep(3)
         else:
-            print(f"  ❌ Lexoffice Fehler: {res.status_code} {res.text[:200]}")
+            logger.error(f"  ❌ Lexoffice Fehler: {res.status_code} {res.text[:200]}")
             return None
     return None
 
@@ -1153,7 +1159,7 @@ async def process_sammel_pdf(
     except Exception as e:
         logger.error(f"❌ PDF nicht lesbar | datei={filename} | fehler={e}")
         try:
-            send_notification_email(access_token, notif_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}")
+            send_notification_email(access_token, mailbox_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}", to_email=notif_email)
         except Exception as mail_err:
             logger.error(f"❌ Info-Mail fehlgeschlagen: {mail_err}")
         write_verarbeitungs_log(tenant_id, filename, 0, 0, 1, 0, "error", f"PDF nicht lesbar: {e}", [])
@@ -1260,9 +1266,10 @@ async def process_sammel_pdf(
                 fehler += 1
                 logger.error(f"  ❌ OneDrive-Upload fehlgeschlagen: {ma_name}")
                 try:
-                    send_notification_email(access_token, notif_email,
+                    send_notification_email(access_token, mailbox_email,
                         f"OneDrive-Fehler: {ma_name}",
-                        f"Die Gehaltsabrechnung für {ma_name} konnte nicht in OneDrive abgelegt werden.")
+                        f"Die Gehaltsabrechnung für {ma_name} konnte nicht in OneDrive abgelegt werden.",
+                        to_email=notif_email)
                 except Exception as mail_err:
                     logger.error(f"  ❌ Fehler-Mail fehlgeschlagen: {mail_err}")
                 continue
@@ -1294,10 +1301,11 @@ async def process_sammel_pdf(
 
     if unklar > 0:
         try:
-            send_notification_email(access_token, notif_email,
+            send_notification_email(access_token, mailbox_email,
                 f"{unklar} Abrechnung(en) nicht zugeordnet",
                 f"Bei der Verarbeitung von '{filename}' konnten {unklar} Seite(n) keinem Mitarbeiter zugeordnet werden. "
-                f"Die Dateien wurden unter /{onedrive_basispfad.strip('/')}/_Unklar abgelegt.")
+                f"Die Dateien wurden unter /{onedrive_basispfad.strip('/')}/_Unklar abgelegt.",
+                to_email=notif_email)
         except Exception as e:
             logger.error(f"❌ Unklar-Benachrichtigung fehlgeschlagen: {e}")
 
@@ -1340,4 +1348,5 @@ def write_verarbeitungs_log(tenant_id: str, dateiname: str, gesamt_seiten: int,
         "seiten_details": [sd.model_dump() for sd in seiten_details]
     }
     db.collection("lohn_kunden").document(tenant_id).collection("verarbeitungs_logs").add(log_data)
-    print(f"  📝 Log geschrieben: {status} — {message}")
+    logger.info(f"  📝 Log geschrieben: {status} — {message}")
+
