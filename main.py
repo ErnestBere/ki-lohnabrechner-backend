@@ -146,8 +146,9 @@ class LohnKundenProfil(BaseModel):
     onedrive_basispfad: str = "/Personal"
     email_betreff_vorlage: str = "Ihre Gehaltsabrechnung {monat}"
     email_text_vorlage: str = "Anbei Ihre Gehaltsabrechnung für {monat}."
-    filter_betreff: List[str] = []   # E-Mail muss einen dieser Begriffe im Betreff enthalten
-    filter_inhalt: List[str] = []    # E-Mail muss einen dieser Begriffe im Body enthalten
+    filter_betreff: List[str] = []
+    filter_inhalt: List[str] = []
+    benachrichtigungs_email: Optional[str] = None  # Fehler-Mails an diese Adresse
 
 class MitarbeiterStamm(BaseModel):
     name: str
@@ -424,6 +425,7 @@ def register_customer(profil: LohnKundenProfil, user_token: dict = Depends(verif
             "onedrive_basispfad": profil.onedrive_basispfad,
             "filter_betreff": profil.filter_betreff,
             "filter_inhalt": profil.filter_inhalt,
+            "benachrichtigungs_email": profil.benachrichtigungs_email or profil.mailbox_email,
         }
 
         if profil.lexoffice_api_key and profil.lexoffice_api_key != "********":
@@ -676,6 +678,7 @@ async def m365_webhook(request: Request):
         STEUERBUERO_ABSENDER = kunde.get("steuerbuero_absender", "").lower()
         EMAIL_BETREFF = kunde.get("email_betreff_vorlage", "Ihre Gehaltsabrechnung {monat}")
         EMAIL_TEXT = kunde.get("email_text_vorlage", "Anbei Ihre Gehaltsabrechnung für {monat}.")
+        BENACHRICHTIGUNGS_EMAIL = kunde.get("benachrichtigungs_email") or MAILBOX_EMAIL
 
         # M365 Token holen
         token_result = get_delegated_token(customer_tenant_id, REFRESH_TOKEN)
@@ -754,12 +757,13 @@ async def m365_webhook(request: Request):
                     email_betreff=EMAIL_BETREFF,
                     email_text=EMAIL_TEXT,
                     onedrive_basispfad=kunde.get("onedrive_basispfad", "/Personal"),
+                    benachrichtigungs_email=BENACHRICHTIGUNGS_EMAIL,
                 )
 
         if not pdf_found:
             print("⚠️ Keine PDF-Anhänge gefunden.")
             send_notification_email(
-                token_result["access_token"], MAILBOX_EMAIL,
+                token_result["access_token"], BENACHRICHTIGUNGS_EMAIL,
                 "KI-Lohnabrechner: Kein PDF-Anhang",
                 "Eine E-Mail vom Steuerbüro wurde empfangen, enthielt aber keinen PDF-Anhang."
             )
@@ -1132,8 +1136,11 @@ async def process_sammel_pdf(
     email_betreff: str,
     email_text: str,
     onedrive_basispfad: str = "/Personal",
+    benachrichtigungs_email: str | None = None,
 ):
     """Hauptpipeline: Sammel-PDF zerlegen, zuordnen, ablegen, Entwürfe erstellen."""
+    # Fallback: Fehler-Mails gehen an die Mailbox selbst
+    notif_email = benachrichtigungs_email or mailbox_email
     logger.info(f"🔄 PIPELINE START | tenant={tenant_id} | datei={filename}")
 
     seiten_details = []
@@ -1146,7 +1153,7 @@ async def process_sammel_pdf(
     except Exception as e:
         logger.error(f"❌ PDF nicht lesbar | datei={filename} | fehler={e}")
         try:
-            send_notification_email(access_token, mailbox_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}")
+            send_notification_email(access_token, notif_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}")
         except Exception as mail_err:
             logger.error(f"❌ Info-Mail fehlgeschlagen: {mail_err}")
         write_verarbeitungs_log(tenant_id, filename, 0, 0, 1, 0, "error", f"PDF nicht lesbar: {e}", [])
@@ -1253,7 +1260,7 @@ async def process_sammel_pdf(
                 fehler += 1
                 logger.error(f"  ❌ OneDrive-Upload fehlgeschlagen: {ma_name}")
                 try:
-                    send_notification_email(access_token, mailbox_email,
+                    send_notification_email(access_token, notif_email,
                         f"OneDrive-Fehler: {ma_name}",
                         f"Die Gehaltsabrechnung für {ma_name} konnte nicht in OneDrive abgelegt werden.")
                 except Exception as mail_err:
@@ -1287,7 +1294,7 @@ async def process_sammel_pdf(
 
     if unklar > 0:
         try:
-            send_notification_email(access_token, mailbox_email,
+            send_notification_email(access_token, notif_email,
                 f"{unklar} Abrechnung(en) nicht zugeordnet",
                 f"Bei der Verarbeitung von '{filename}' konnten {unklar} Seite(n) keinem Mitarbeiter zugeordnet werden. "
                 f"Die Dateien wurden unter /{onedrive_basispfad.strip('/')}/_Unklar abgelegt.")
