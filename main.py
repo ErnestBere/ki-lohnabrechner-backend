@@ -93,7 +93,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview")
 
 # Graph API Scopes (anders als ki-buchhalter: Files statt Calendar/Planner)
-GRAPH_SCOPES = ["User.Read", "Mail.Read", "Mail.ReadWrite", "Files.ReadWrite.All"]
+GRAPH_SCOPES = ["User.Read", "Mail.Read", "Mail.ReadWrite", "Mail.Send", "Files.ReadWrite.All"]
 
 if not ENCRYPTION_KEY or not BACKEND_API_SECRET:
     logger.warning("⚠️ WARNUNG: ENCRYPTION_KEY oder BACKEND_API_SECRET fehlt! Server startet, aber Auth-Funktionen sind deaktiviert.")
