@@ -101,13 +101,13 @@ if not ENCRYPTION_KEY or not BACKEND_API_SECRET:
 else:
     fernet = Fernet(ENCRYPTION_KEY)
 
-# Gemini Client (API-Key statt Vertex AI)
+# Gemini Client — DSGVO-konform über Vertex AI (Daten bleiben in Frankfurt)
 gemini_client = None
-if GEMINI_API_KEY and genai:
+if genai:
     try:
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        gemini_client = genai.Client(vertexai=True, location="europe-west3")
     except Exception as e:
-        logger.warning(f"⚠️ Gemini Client Fehler: {e}")
+        logger.warning(f"⚠️ Vertex AI Client Fehler: {e}")
 
 # Firestore
 db = None
