@@ -1,4 +1,4 @@
-﻿"""
+"""
 KI-Lohnabrechner Backend
 ========================
 Automatisiert die Verarbeitung von Sammel-PDFs mit Gehaltsabrechnungen.
@@ -385,7 +385,7 @@ def microsoft_callback(code: str, state: str):
         )
 
         if "error" in token_result:
-            logger.error(f"🚨 Auth-Fehler: {token_result.get(\"error_description\")}")
+            logger.error(f"🚨 Auth-Fehler: {token_result.get('error_description')}")
             return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?error=auth_failed")
 
         access_token = token_result["access_token"]
@@ -690,8 +690,9 @@ async def m365_webhook(request: Request):
 
         headers = {"Authorization": f"Bearer {token_result['access_token']}", "Content-Type": "application/json"}
 
-        # Absender-Filter + Betreff/Inhalt-Filter prüfen
+        # E-Mail-Metadaten laden
         mail_res = requests.get(f"https://graph.microsoft.com/v1.0/{resource_path}?$select=subject,from,body", headers=headers)
+        betreff_filter_match = False  # Wird True wenn Betreff-Filter konfiguriert und gematcht
         if mail_res.status_code == 200:
             mail_data = mail_res.json()
             mail_sender = mail_data.get("from", {}).get("emailAddress", {}).get("address", "").lower()
@@ -706,9 +707,13 @@ async def m365_webhook(request: Request):
             # Betreff-Filter (optional): mindestens einer muss matchen
             filter_betreff = kunde.get("filter_betreff", [])
             if filter_betreff:
-                if not any(f.lower() in mail_subject for f in filter_betreff):
+                if any(f.lower() in mail_subject for f in filter_betreff):
+                    betreff_filter_match = True
+                else:
                     logger.info(f"⏭️ Betreff-Filter: kein Match | betreff={mail_subject[:80]}")
                     continue
+            else:
+                betreff_filter_match = True  # Kein Filter = immer Match
 
             # Inhalt-Filter (optional): mindestens einer muss matchen
             filter_inhalt = kunde.get("filter_inhalt", [])
@@ -722,29 +727,63 @@ async def m365_webhook(request: Request):
         att_meta_res = requests.get(meta_url, headers=headers)
 
         pdf_found = False
+        pdf_base64 = None
+        filename = None
         for att_meta in att_meta_res.json().get("value", []):
-            filename = att_meta.get("name", "")
+            att_filename = att_meta.get("name", "")
             att_size = att_meta.get("size", 0)
             att_id = att_meta.get("id")
 
-            if not filename.lower().endswith(".pdf"):
+            if not att_filename.lower().endswith(".pdf"):
                 continue
 
             pdf_found = True
             MAX_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
 
             if att_size > MAX_SIZE_BYTES:
-                logger.warning(f"🛡️ PDF zu groß: {filename} ({att_size / 1024 / 1024:.1f} MB)")
-                # TODO: Info-Mail an Thomas (Task 7.2)
+                logger.warning(f"🛡️ PDF zu groß: {att_filename} ({att_size / 1024 / 1024:.1f} MB)")
+                send_notification_email(
+                    token_result["access_token"], MAILBOX_EMAIL,
+                    f"PDF zu groß: {att_filename}",
+                    f"Die Datei '{att_filename}' ({att_size / 1024 / 1024:.1f} MB) überschreitet das Limit von 25 MB und wurde nicht verarbeitet.",
+                    to_email=BENACHRICHTIGUNGS_EMAIL
+                )
                 continue
 
-            logger.info(f"⬇️ Lade '{filename}' ({att_size / 1024 / 1024:.2f} MB)...")
+            logger.info(f"⬇️ Lade '{att_filename}' ({att_size / 1024 / 1024:.2f} MB)...")
             content_url = f"https://graph.microsoft.com/v1.0/{resource_path}/attachments/{att_id}"
             content_res = requests.get(content_url, headers=headers)
             pdf_base64 = content_res.json().get("contentBytes")
+            filename = att_filename
+            break  # Erste PDF reicht
 
-        if pdf_base64:
-                pdf_bytes = base64.b64decode(pdf_base64)
+        if not pdf_found:
+            logger.warning("⚠️ Keine PDF-Anhänge gefunden.")
+            if betreff_filter_match:
+                # Betreff hat gematcht aber keine PDF → Admin benachrichtigen
+                send_notification_email(
+                    token_result["access_token"], MAILBOX_EMAIL,
+                    "Kein PDF-Anhang",
+                    f"Eine E-Mail vom Steuerbüro wurde empfangen (Betreff: {mail_subject[:100]}), enthielt aber keinen PDF-Anhang.",
+                    to_email=BENACHRICHTIGUNGS_EMAIL
+                )
+        elif pdf_base64 and filename:
+            pdf_bytes = base64.b64decode(pdf_base64)
+
+            # Gemini-Vorab-Check: Ist das eine Lohnabrechnung?
+            logger.info(f"🔍 Gemini-Vorab-Check: Ist '{filename}' eine Lohnabrechnung?")
+            ist_lohnabrechnung = check_ist_lohnabrechnung(pdf_bytes, filename)
+
+            if not ist_lohnabrechnung:
+                logger.warning(f"⏭️ Gemini: '{filename}' ist keine Lohnabrechnung — Verarbeitung abgebrochen.")
+                if betreff_filter_match:
+                    send_notification_email(
+                        token_result["access_token"], MAILBOX_EMAIL,
+                        f"Kein Lohnabrechnung-Dokument: {filename}",
+                        f"Die E-Mail vom Steuerbüro enthielt die Datei '{filename}', die von der KI nicht als Lohnabrechnung erkannt wurde. Bitte prüfen Sie die E-Mail manuell.",
+                        to_email=BENACHRICHTIGUNGS_EMAIL
+                    )
+            else:
                 # Verarbeitungspipeline starten
                 await process_sammel_pdf(
                     pdf_bytes=pdf_bytes,
@@ -759,15 +798,6 @@ async def m365_webhook(request: Request):
                     onedrive_basispfad=kunde.get("onedrive_basispfad", "/Personal"),
                     benachrichtigungs_email=BENACHRICHTIGUNGS_EMAIL,
                 )
-
-        if not pdf_found:
-            logger.warning("⚠️ Keine PDF-Anhänge gefunden.")
-            send_notification_email(
-                token_result["access_token"], MAILBOX_EMAIL,
-                "Kein PDF-Anhang",
-                "Eine E-Mail vom Steuerbüro wurde empfangen, enthielt aber keinen PDF-Anhang.",
-                to_email=BENACHRICHTIGUNGS_EMAIL
-            )
 
         # Status aktualisieren
         mail_doc_ref.update({"status": "done", "processed_at": firestore.SERVER_TIMESTAMP})
@@ -1125,6 +1155,41 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str) -> dict |
             logger.error(f"  ❌ Lexoffice Fehler: {res.status_code} {res.text[:200]}")
             return None
     return None
+
+
+# ==========================================
+# 🔍 GEMINI VORAB-CHECK
+# ==========================================
+
+def check_ist_lohnabrechnung(pdf_bytes: bytes, filename: str) -> bool:
+    """Prüft per Gemini ob das PDF eine Lohnabrechnung ist. Schneller Check vor der Pipeline."""
+    if not gemini_client:
+        logger.warning("⚠️ Gemini nicht verfügbar — Vorab-Check übersprungen, PDF wird verarbeitet.")
+        return True  # Im Zweifel verarbeiten
+    try:
+        response = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                types.Content(parts=[
+                    types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
+                    types.Part.from_text(text="Ist dieses Dokument eine Lohn- oder Gehaltsabrechnung für einen oder mehrere Mitarbeiter? Antworte NUR mit JSON: {\"ist_lohnabrechnung\": true/false, \"begruendung\": \"kurze Begründung\"}"),
+                ])
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction="Du bist ein Experte für deutsche Lohnabrechnungen. Prüfe ob das Dokument eine DATEV-Lohnabrechnung, Gehaltsabrechnung oder Lohnauswertung ist. Rechnungen, Angebote, Verträge oder andere Dokumente sind KEINE Lohnabrechnungen.",
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
+        )
+        import json as _json
+        result = _json.loads(response.text)
+        ist_lohn = result.get("ist_lohnabrechnung", False)
+        begruendung = result.get("begruendung", "")
+        logger.info(f"🔍 Gemini-Check: ist_lohnabrechnung={ist_lohn} | {begruendung}")
+        return ist_lohn
+    except Exception as e:
+        logger.warning(f"⚠️ Gemini-Vorab-Check Fehler: {e} — PDF wird verarbeitet.")
+        return True  # Im Zweifel verarbeiten
 
 
 # ==========================================
