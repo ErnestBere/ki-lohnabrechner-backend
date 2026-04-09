@@ -34,7 +34,7 @@ try:
     import pytesseract
     from PIL import Image
 except Exception as e:
-    logger.warning(f"⚠️ Tesseract/Pillow nicht verfügbar: {e}")
+    logger.warning(f"⚠️ Tesseract/Pillow nicht verfuegbar: {e}")
     pytesseract = None
 
 from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends, Security
