@@ -162,6 +162,10 @@ class GeminiSeitenInfo(BaseModel):
     personal_nr: Optional[str] = Field(default=None, description="Personalnummer (nur Ziffern)")
     abrechnungsmonat: Optional[str] = Field(default=None, description="Abrechnungsmonat z.B. 'März 2026'")
     seitentyp: str = Field(description="lohnabrechnung, zahlungsuebersicht, sv_nachweis, sonstiges")
+    brutto_betrag: Optional[float] = Field(default=None, description="Gesamt-Brutto in Euro (nur bei Lohnabrechnung)")
+    netto_betrag: Optional[float] = Field(default=None, description="Auszahlungsbetrag/Netto in Euro (nur bei Lohnabrechnung)")
+    gesamt_brutto: Optional[float] = Field(default=None, description="Summe aller Brutto-Gehälter (nur bei Zahlungsübersicht)")
+    gesamt_netto: Optional[float] = Field(default=None, description="Summe aller Netto-Auszahlungen (nur bei Zahlungsübersicht)")
 
 class LohnSeitenInfo(BaseModel):
     seite: int
@@ -173,6 +177,8 @@ class LohnSeitenInfo(BaseModel):
     quelle: str = ""
     gemini_result: Optional[dict] = None
     validierung: str = ""
+    brutto_betrag: Optional[float] = None
+    netto_betrag: Optional[float] = None
 
 class SeitenDetail(BaseModel):
     seite: int
@@ -183,6 +189,8 @@ class SeitenDetail(BaseModel):
     quelle: str
     validierung: str
     fehler_details: Optional[str] = None
+    brutto_betrag: Optional[float] = None
+    netto_betrag: Optional[float] = None
 
 class VerarbeitungsLog(BaseModel):
     timestamp: Optional[Any] = None
@@ -194,6 +202,8 @@ class VerarbeitungsLog(BaseModel):
     nicht_zugeordnet: int
     message: str
     seiten_details: List[SeitenDetail]
+    gesamt_brutto: Optional[float] = None
+    gesamt_netto: Optional[float] = None
 
 
 # ==========================================
@@ -990,6 +1000,8 @@ def process_page(page, page_num: int) -> LohnSeitenInfo:
         info.ist_lohnabrechnung = gemini_info.ist_lohnabrechnung
         info.typ = gemini_info.seitentyp if gemini_info.ist_lohnabrechnung else local_typ
         info.quelle = f"{local_quelle}+gemini"
+        info.brutto_betrag = gemini_info.brutto_betrag or gemini_info.gesamt_brutto
+        info.netto_betrag = gemini_info.netto_betrag or gemini_info.gesamt_netto
     else:
         info.mitarbeiter_name = local_name
         info.personal_nr = local_pnr
@@ -1003,14 +1015,20 @@ def process_page(page, page_num: int) -> LohnSeitenInfo:
 
 
 def generate_filename(name: str, monat: str) -> str:
-    """Erzeugt Dateiname: Gehaltsabrechnung_<Name>_<MM-YYYY>.pdf"""
+    """Erzeugt Dateiname: <JJMMTT>_Gehaltsabrechnung_<Name>.pdf
+    Wobei TT immer der letzte Tag des Monats ist."""
     name_clean = name.replace(" ", "_")
     parts = monat.split() if monat else []
     if len(parts) == 2 and parts[0] in MONAT_MAP:
-        monat_fmt = f"{MONAT_MAP[parts[0]]}-{parts[1]}"
+        mm = MONAT_MAP[parts[0]]
+        jj = parts[1][2:]  # 2026 → 26
+        # Letzter Tag des Monats
+        import calendar
+        last_day = calendar.monthrange(int(parts[1]), int(mm))[1]
+        datum = f"{jj}{mm}{last_day:02d}"
     else:
-        monat_fmt = monat.replace(" ", "-") if monat else "unbekannt"
-    return f"Gehaltsabrechnung_{name_clean}_{monat_fmt}.pdf"
+        datum = monat.replace(" ", "") if monat else "unbekannt"
+    return f"{datum}_Gehaltsabrechnung_{name_clean}.pdf"
 
 
 def create_single_pdf(doc, pages: list[int]) -> bytes:
@@ -1274,7 +1292,8 @@ async def process_sammel_pdf(
         if not info.ist_lohnabrechnung:
             seiten_details.append(SeitenDetail(
                 seite=info.seite, typ=info.typ, status="uebersprungen",
-                quelle=info.quelle, validierung=info.validierung
+                quelle=info.quelle, validierung=info.validierung,
+                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag
             ))
             continue
 
@@ -1288,7 +1307,8 @@ async def process_sammel_pdf(
             seiten_details.append(SeitenDetail(
                 seite=info.seite, typ=info.typ, mitarbeiter_name=ma.get("name"),
                 personal_nr=ma.get("personal_nr"), status="zugeordnet",
-                quelle=info.quelle, validierung=info.validierung
+                quelle=info.quelle, validierung=info.validierung,
+                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag
             ))
             logger.info(f"  ✅ Zugeordnet: {info.mitarbeiter_name} → {ma.get('name')} (PNr: {ma.get('personal_nr')})")
         else:
@@ -1305,7 +1325,8 @@ async def process_sammel_pdf(
                 seite=info.seite, typ=info.typ, mitarbeiter_name=info.mitarbeiter_name,
                 personal_nr=info.personal_nr, status="unklar",
                 quelle=info.quelle, validierung=info.validierung,
-                fehler_details="Kein passender Mitarbeiter in Stammdaten"
+                fehler_details="Kein passender Mitarbeiter in Stammdaten",
+                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag
             ))
 
     # Pro Mitarbeiter: Einzel-PDF erzeugen, ablegen, Entwurf, Lexoffice
@@ -1385,8 +1406,18 @@ async def process_sammel_pdf(
     status = "success" if fehler == 0 and unklar == 0 else ("error" if erkannte == 0 else "partial")
     message = f"{erkannte} Mitarbeiter verarbeitet, {fehler} Fehler, {unklar} nicht zugeordnet"
     
+    # Gesamt-Beträge aus den Seiten-Details berechnen
+    sum_brutto = sum(s.brutto_betrag for s in seiten_details if s.brutto_betrag and s.typ == "lohnabrechnung")
+    sum_netto = sum(s.netto_betrag for s in seiten_details if s.netto_betrag and s.typ == "lohnabrechnung")
+    # Zahlungsübersicht-Beträge (falls vorhanden)
+    for s in seiten_details:
+        if s.typ == "zahlungsuebersicht" and s.brutto_betrag:
+            sum_brutto = s.brutto_betrag  # Übersicht hat die offiziellen Summen
+        if s.typ == "zahlungsuebersicht" and s.netto_betrag:
+            sum_netto = s.netto_betrag
+
     try:
-        write_verarbeitungs_log(tenant_id, filename, gesamt_seiten, erkannte, fehler, unklar, status, message, seiten_details)
+        write_verarbeitungs_log(tenant_id, filename, gesamt_seiten, erkannte, fehler, unklar, status, message, seiten_details, sum_brutto, sum_netto)
     except Exception as e:
         logger.error(f"❌ Log-Schreiben fehlgeschlagen: {e}", exc_info=True)
 
@@ -1399,7 +1430,8 @@ async def process_sammel_pdf(
 
 def write_verarbeitungs_log(tenant_id: str, dateiname: str, gesamt_seiten: int,
                             erkannte: int, fehler: int, unklar: int,
-                            status: str, message: str, seiten_details: list[SeitenDetail]):
+                            status: str, message: str, seiten_details: list[SeitenDetail],
+                            gesamt_brutto: float = 0, gesamt_netto: float = 0):
     """Schreibt einen Verarbeitungs-Log-Eintrag in Firestore."""
     log_data = {
         "timestamp": firestore.SERVER_TIMESTAMP,
@@ -1410,7 +1442,9 @@ def write_verarbeitungs_log(tenant_id: str, dateiname: str, gesamt_seiten: int,
         "fehler_anzahl": fehler,
         "nicht_zugeordnet": unklar,
         "message": message,
-        "seiten_details": [sd.model_dump() for sd in seiten_details]
+        "seiten_details": [sd.model_dump() for sd in seiten_details],
+        "gesamt_brutto": round(gesamt_brutto, 2) if gesamt_brutto else None,
+        "gesamt_netto": round(gesamt_netto, 2) if gesamt_netto else None,
     }
     db.collection("lohn_kunden").document(tenant_id).collection("verarbeitungs_logs").add(log_data)
     logger.info(f"  📝 Log geschrieben: {status} — {message}")
