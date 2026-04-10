@@ -166,6 +166,7 @@ class GeminiSeitenInfo(BaseModel):
     netto_betrag: Optional[float] = Field(default=None, description="Auszahlungsbetrag/Netto in Euro (nur bei Lohnabrechnung)")
     gesamt_brutto: Optional[float] = Field(default=None, description="Summe aller Brutto-Gehälter (nur bei Zahlungsübersicht)")
     gesamt_netto: Optional[float] = Field(default=None, description="Summe aller Netto-Auszahlungen (nur bei Zahlungsübersicht)")
+    zahlungspositionen: Optional[List[dict]] = Field(default=None, description="Liste der Zahlungen aus der Zahlungsübersicht. Jeder Eintrag: {empfaenger: str, betrag: float, verwendungszweck: str, faelligkeit: str|null}. Nur bei Zahlungsübersicht.")
 
 class LohnSeitenInfo(BaseModel):
     seite: int
@@ -179,18 +180,24 @@ class LohnSeitenInfo(BaseModel):
     validierung: str = ""
     brutto_betrag: Optional[float] = None
     netto_betrag: Optional[float] = None
+    zahlungspositionen: Optional[List[dict]] = None
+    gesamtsumme: Optional[float] = None
+    betrag_warnung: Optional[str] = None
 
 class SeitenDetail(BaseModel):
     seite: int
     typ: str
     mitarbeiter_name: Optional[str] = None
     personal_nr: Optional[str] = None
-    status: str  # zugeordnet, unklar, fehler, uebersprungen
+    status: str
     quelle: str
     validierung: str
     fehler_details: Optional[str] = None
     brutto_betrag: Optional[float] = None
     netto_betrag: Optional[float] = None
+    zahlungspositionen: Optional[List[dict]] = None
+    gesamtsumme: Optional[float] = None
+    betrag_warnung: Optional[str] = None
 
 class VerarbeitungsLog(BaseModel):
     timestamp: Optional[Any] = None
@@ -828,7 +835,7 @@ MONAT_MAP = {
 
 def extract_from_text(text: str) -> dict:
     """Stufe 1: Regex-basierte Extraktion aus PDF-Text-Layer."""
-    result = {"name": None, "pnr": None, "monat": None, "typ": None}
+    result = {"name": None, "pnr": None, "monat": None, "typ": None, "brutto": None, "netto": None}
     lines = [l.strip() for l in text.split("\n") if l.strip()]
 
     if "Übersicht Zahlungen" in text or "Zahlungen im" in text:
@@ -836,6 +843,10 @@ def extract_from_text(text: str) -> dict:
         m = re.search(r"(?:Zahlungen im|für)\s+(\w+\s+\d{4})", text)
         if m:
             result["monat"] = m.group(1)
+        # Gesamtsumme extrahieren
+        m = re.search(r"Gesamtsumme\s*:?\s*([\d.,]+)", text)
+        if m:
+            result["brutto"] = float(m.group(1).replace(".", "").replace(",", "."))
         return result
 
     lohn_kw = ["Abrechnung der Brutto", "Brutto/Netto", "Pers.-Nr.",
@@ -852,6 +863,18 @@ def extract_from_text(text: str) -> dict:
         m = re.search(r"für\s+(\w+\s+\d{4})", text)
         if m:
             result["monat"] = m.group(1)
+
+        # Beträge extrahieren
+        for pat in [r"Gesamt-Brutto\s*([\d.,]+)", r"GESAMT-BRUTTO\s*([\d.,]+)"]:
+            m = re.search(pat, text)
+            if m:
+                result["brutto"] = float(m.group(1).replace(".", "").replace(",", "."))
+                break
+        for pat in [r"AUSZAHLUNG\s*([\d.,]+)", r"Netto-Verdienst\s*([\d.,]+)", r"NETTO-VERDIENST\s*([\d.,]+)"]:
+            m = re.search(pat, text)
+            if m:
+                result["netto"] = float(m.group(1).replace(".", "").replace(",", "."))
+                break
 
         found_pnr = found_firma = False
         for line in lines:
@@ -880,7 +903,7 @@ def extract_from_ocr(page) -> tuple[dict, str]:
     img = Image.open(io.BytesIO(pix.tobytes("png")))
     ocr_text = pytesseract.image_to_string(img, lang="deu")
 
-    result = {"name": None, "pnr": None, "monat": None, "typ": None}
+    result = {"name": None, "pnr": None, "monat": None, "typ": None, "brutto": None, "netto": None}
     lines = [l.strip() for l in ocr_text.split("\n") if l.strip()]
 
     lohn_kw = ["Abrechnung der Brutto", "Brutto/Netto", "Pers.-Nr.", "Pers.—Nr.",
@@ -900,6 +923,20 @@ def extract_from_ocr(page) -> tuple[dict, str]:
         if m:
             result["monat"] = m.group(1)
 
+        # Beträge per OCR
+        for pat in [r"Gesamt[\-—]?Brutto\s*([\d.,]+)", r"GESAMT[\-—]?BRUTTO\s*([\d.,]+)"]:
+            m = re.search(pat, ocr_text)
+            if m:
+                try: result["brutto"] = float(m.group(1).replace(".", "").replace(",", "."))
+                except: pass
+                break
+        for pat in [r"AUSZAHLUNG\s*([\d.,]+)", r"Netto[\-—]?Verdienst\s*([\d.,]+)", r"NETTO[\-—]?VERDIENST\s*([\d.,]+)"]:
+            m = re.search(pat, ocr_text)
+            if m:
+                try: result["netto"] = float(m.group(1).replace(".", "").replace(",", "."))
+                except: pass
+                break
+
         for line in lines:
             pnr_in_line = re.search(r"(.+?)\s*\*?\s*[Pp]ers\.?\s*[\._\-—]?\s*[NnXx]r\.?\s*\d+", line)
             if pnr_in_line:
@@ -915,6 +952,10 @@ def extract_from_ocr(page) -> tuple[dict, str]:
         m = re.search(r"(?:Zahlungen im|für)\s+(\w+\s+\d{4})", ocr_text)
         if m:
             result["monat"] = m.group(1)
+        m = re.search(r"Gesamtsumme\s*:?\s*([\d.,]+)", ocr_text)
+        if m:
+            try: result["brutto"] = float(m.group(1).replace(".", "").replace(",", "."))
+            except: pass
 
     return result, ocr_text
 
@@ -962,6 +1003,8 @@ def process_page(page, page_num: int) -> LohnSeitenInfo:
     local_monat = text_result["monat"] or ocr_result["monat"]
     local_typ = text_result["typ"] or ocr_result["typ"] or "unbekannt"
     local_quelle = "text" if has_good_text else ("ocr" if needs_ocr else "text")
+    local_brutto = text_result.get("brutto") or ocr_result.get("brutto")
+    local_netto = text_result.get("netto") or ocr_result.get("netto")
 
     # Gemini Vision (immer)
     single_doc = fitz.open()
@@ -1002,6 +1045,26 @@ def process_page(page, page_num: int) -> LohnSeitenInfo:
         info.quelle = f"{local_quelle}+gemini"
         info.brutto_betrag = gemini_info.brutto_betrag or gemini_info.gesamt_brutto
         info.netto_betrag = gemini_info.netto_betrag or gemini_info.gesamt_netto
+        if gemini_info.zahlungspositionen:
+            info.zahlungspositionen = gemini_info.zahlungspositionen
+            info.gesamtsumme = sum(z.get("betrag", 0) for z in gemini_info.zahlungspositionen if z.get("betrag"))
+
+        # Kreuzvalidierung: OCR/Text-Beträge vs. Gemini-Beträge
+        g_brutto = gemini_info.brutto_betrag or gemini_info.gesamt_brutto
+        g_netto = gemini_info.netto_betrag or gemini_info.gesamt_netto
+        betrag_ok = True
+        if local_brutto and g_brutto and abs(local_brutto - g_brutto) > 0.02:
+            betrag_ok = False
+            logger.warning(f"  ⚠️ Betrag-Abweichung Seite {page_num}: Brutto lokal={local_brutto} vs. Gemini={g_brutto}")
+        if local_netto and g_netto and abs(local_netto - g_netto) > 0.02:
+            betrag_ok = False
+            logger.warning(f"  ⚠️ Betrag-Abweichung Seite {page_num}: Netto lokal={local_netto} vs. Gemini={g_netto}")
+        if not betrag_ok:
+            info.betrag_warnung = "Bitte manuell prüfen — OCR und KI liefern unterschiedliche Beträge"
+        # Wenn nur eine Quelle Beträge hat, auch warnen
+        elif (local_brutto and not g_brutto) or (g_brutto and not local_brutto):
+            if info.ist_lohnabrechnung:
+                info.betrag_warnung = "Betrag nur aus einer Quelle — bitte manuell prüfen"
     else:
         info.mitarbeiter_name = local_name
         info.personal_nr = local_pnr
@@ -1150,27 +1213,87 @@ def send_notification_email(access_token: str, mailbox_email: str, subject: str,
 # 📤 LEXOFFICE-CLIENT
 # ==========================================
 
-def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str) -> dict | None:
-    """Lädt ein Dokument als 'Sonstiges' in Lexoffice hoch."""
+def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_betrag: float = 0, netto_betrag: float = 0, monat: str = "") -> dict | None:
+    """Erstellt einen Voucher in Lexoffice mit Kategorie 'Löhne & Gehälter' und hängt die PDF an."""
     if not api_key:
         logger.info("  ⏭️ Kein Lexoffice API-Key — Upload übersprungen.")
         return None
 
-    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-    files = {"file": (filename, pdf_bytes, "application/pdf")}
-    data = {"type": "voucher"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Accept": "application/json"}
+
+    # Betrag bestimmen (Brutto bevorzugt, Fallback Netto)
+    betrag = brutto_betrag or netto_betrag
+    if not betrag or betrag <= 0:
+        # Fallback: Nur Datei-Upload ohne Voucher
+        logger.info(f"  ⚠️ Kein Betrag erkannt — einfacher Datei-Upload für {filename}")
+        upload_headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+        files = {"file": (filename, pdf_bytes, "application/pdf")}
+        data = {"type": "voucher"}
+        res = requests.post("https://api.lexware.io/v1/files", headers=upload_headers, files=files, data=data)
+        if res.status_code == 202:
+            logger.info(f"  📤 Lexoffice Datei-Upload: {filename}")
+            return res.json()
+        logger.error(f"  ❌ Lexoffice Datei-Upload Fehler: {res.status_code} {res.text[:200]}")
+        return None
+
+    # Belegdatum aus Monat berechnen
+    voucher_date = None
+    if monat:
+        parts = monat.split()
+        if len(parts) == 2 and parts[0] in MONAT_MAP:
+            mm = int(MONAT_MAP[parts[0]])
+            yyyy = int(parts[1])
+            import calendar
+            last_day = calendar.monthrange(yyyy, mm)[1]
+            voucher_date = f"{yyyy}-{mm:02d}-{last_day:02d}"
+
+    if not voucher_date:
+        voucher_date = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    # Voucher erstellen mit Kategorie "Löhne & Gehälter"
+    # categoryId für "Löhne & Gehälter" (outgo) — Standard Lexoffice Kategorie
+    LOHN_CATEGORY_ID = "7aa1c922-fd87-11e1-a21f-0800200c9a66"
+
+    voucher_payload = {
+        "type": "purchaseinvoice",
+        "voucherNumber": filename.replace(".pdf", ""),
+        "voucherDate": voucher_date,
+        "dueDate": voucher_date,
+        "totalGrossAmount": round(betrag, 2),
+        "totalTaxAmount": 0,
+        "taxType": "gross",
+        "useCollectiveContact": True,
+        "remark": f"Gehaltsabrechnung {monat} — automatisch erstellt vom KI-Lohnabrechner",
+        "voucherItems": [{
+            "amount": round(betrag, 2),
+            "taxAmount": 0,
+            "taxRatePercent": 0,
+            "categoryId": LOHN_CATEGORY_ID
+        }]
+    }
 
     for attempt in range(3):
-        res = requests.post("https://api.lexoffice.io/v1/files", headers=headers, files=files, data=data)
-        if res.status_code == 202:
-            logger.info(f"  📤 Lexoffice: {filename} hochgeladen.")
+        res = requests.post("https://api.lexware.io/v1/vouchers", headers=headers, json=voucher_payload)
+        if res.status_code == 201:
+            voucher_id = res.json().get("id")
+            logger.info(f"  📤 Lexoffice Voucher erstellt: {filename} | id={voucher_id}")
+
+            # PDF an den Voucher anhängen
+            upload_headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+            files = {"file": (filename, pdf_bytes, "application/pdf")}
+            file_res = requests.post(f"https://api.lexware.io/v1/vouchers/{voucher_id}/files", headers=upload_headers, files=files)
+            if file_res.status_code in [200, 201, 202]:
+                logger.info(f"  📎 PDF angehängt an Voucher {voucher_id}")
+            else:
+                logger.warning(f"  ⚠️ PDF-Anhang fehlgeschlagen: {file_res.status_code} {file_res.text[:200]}")
+
             return res.json()
         elif res.status_code == 429:
             logger.warning(f"  ⏳ Lexoffice Rate Limit — Warte 3s (Versuch {attempt + 1}/3)")
             import time
             time.sleep(3)
         else:
-            logger.error(f"  ❌ Lexoffice Fehler: {res.status_code} {res.text[:200]}")
+            logger.error(f"  ❌ Lexoffice Voucher Fehler: {res.status_code} {res.text[:300]}")
             return None
     return None
 
@@ -1293,7 +1416,9 @@ async def process_sammel_pdf(
             seiten_details.append(SeitenDetail(
                 seite=info.seite, typ=info.typ, status="uebersprungen",
                 quelle=info.quelle, validierung=info.validierung,
-                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag
+                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag,
+                zahlungspositionen=info.zahlungspositionen, gesamtsumme=info.gesamtsumme,
+                betrag_warnung=info.betrag_warnung
             ))
             continue
 
@@ -1308,7 +1433,8 @@ async def process_sammel_pdf(
                 seite=info.seite, typ=info.typ, mitarbeiter_name=ma.get("name"),
                 personal_nr=ma.get("personal_nr"), status="zugeordnet",
                 quelle=info.quelle, validierung=info.validierung,
-                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag
+                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag,
+                betrag_warnung=info.betrag_warnung
             ))
             logger.info(f"  ✅ Zugeordnet: {info.mitarbeiter_name} → {ma.get('name')} (PNr: {ma.get('personal_nr')})")
         else:
@@ -1326,7 +1452,8 @@ async def process_sammel_pdf(
                 personal_nr=info.personal_nr, status="unklar",
                 quelle=info.quelle, validierung=info.validierung,
                 fehler_details="Kein passender Mitarbeiter in Stammdaten",
-                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag
+                brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag,
+                betrag_warnung=info.betrag_warnung
             ))
 
     # Pro Mitarbeiter: Einzel-PDF erzeugen, ablegen, Entwurf, Lexoffice
@@ -1376,7 +1503,10 @@ async def process_sammel_pdf(
 
             if lexoffice_api_key:
                 try:
-                    upload_to_lexoffice(lexoffice_api_key, pdf_einzeln, pdf_filename)
+                    upload_to_lexoffice(lexoffice_api_key, pdf_einzeln, pdf_filename,
+                                       brutto_betrag=info.brutto_betrag or 0,
+                                       netto_betrag=info.netto_betrag or 0,
+                                       monat=monat)
                     logger.info(f"  📤 Lexoffice OK: {pdf_filename}")
                 except Exception as e:
                     logger.error(f"  ❌ Lexoffice-Fehler für {ma_name}: {e}", exc_info=True)
