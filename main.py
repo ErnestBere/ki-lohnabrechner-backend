@@ -149,6 +149,7 @@ class LohnKundenProfil(BaseModel):
     filter_betreff: List[str] = []
     filter_inhalt: List[str] = []
     benachrichtigungs_email: Optional[str] = None  # Fehler-Mails an diese Adresse
+    zahlungs_tracking: bool = False  # Checkbox-Feature im Dashboard aktivieren
 
 class MitarbeiterStamm(BaseModel):
     name: str
@@ -443,6 +444,7 @@ def register_customer(profil: LohnKundenProfil, user_token: dict = Depends(verif
             "filter_betreff": profil.filter_betreff,
             "filter_inhalt": profil.filter_inhalt,
             "benachrichtigungs_email": profil.benachrichtigungs_email or profil.mailbox_email,
+            "zahlungs_tracking": profil.zahlungs_tracking,
         }
 
         if profil.lexoffice_api_key and profil.lexoffice_api_key != "********":
@@ -632,6 +634,34 @@ def delete_webhook(tenant_id: str, mailbox_email: str, user_token: dict = Depend
         pf_ref.delete()
 
     return {"message": "Webhook und Postfach gelöscht."}
+
+
+# ==========================================
+# ✅ ZAHLUNGS-TRACKING
+# ==========================================
+
+class ZahlungsStatusUpdate(BaseModel):
+    log_id: str
+    position_index: int  # Index in zahlungspositionen oder seiten_details
+    bezahlt: bool
+
+@app.post("/api/zahlungsstatus")
+def update_zahlungsstatus(update: ZahlungsStatusUpdate, user_token: dict = Depends(verify_firebase_token)):
+    """Setzt den Zahlungsstatus einer Position im Verarbeitungs-Log."""
+    tenant_id = user_token.get("tid") or user_token.get("uid")
+    log_ref = db.collection("lohn_kunden").document(tenant_id).collection("verarbeitungs_logs").document(update.log_id)
+    log_doc = log_ref.get()
+    if not log_doc.exists:
+        raise HTTPException(status_code=404, detail="Log nicht gefunden.")
+
+    # Zahlungsstatus in einer separaten Map speichern
+    zahlungsstatus = log_doc.to_dict().get("zahlungsstatus", {})
+    zahlungsstatus[str(update.position_index)] = {
+        "bezahlt": update.bezahlt,
+        "zeitpunkt": firestore.SERVER_TIMESTAMP
+    }
+    log_ref.update({"zahlungsstatus": zahlungsstatus})
+    return {"message": "Status aktualisiert."}
 
 
 # ==========================================
@@ -1127,6 +1157,36 @@ def match_mitarbeiter(personal_nr: str | None, name: str | None, stammdaten: lis
 # ==========================================
 # 📁 GRAPH-CLIENT: ONEDRIVE + E-MAIL
 # ==========================================
+
+def find_onedrive_folder_for_mitarbeiter(access_token: str, user_email: str, basispfad: str, ma_name: str) -> str | None:
+    """Sucht im OneDrive-Basispfad nach einem Ordner der den Mitarbeiternamen enthält.
+    Gibt den vollständigen Pfad zurück oder None wenn kein Match."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    url = f"https://graph.microsoft.com/v1.0/users/{user_email}/drive/root:/{basispfad.strip('/')}:/children?$filter=folder ne null&$select=name"
+    try:
+        res = requests.get(url, headers=headers)
+        if res.status_code != 200:
+            logger.warning(f"  ⚠️ OneDrive Ordner-Listing fehlgeschlagen: {res.status_code}")
+            return None
+
+        folders = res.json().get("value", [])
+        name_parts = ma_name.lower().split()
+
+        for folder in folders:
+            folder_name = folder.get("name", "")
+            folder_lower = folder_name.lower()
+            # Prüfe ob alle Teile des Namens im Ordnernamen vorkommen
+            if all(part in folder_lower for part in name_parts):
+                match_path = f"{basispfad.strip('/')}/{folder_name}"
+                logger.info(f"  🔍 Auto-Match: '{ma_name}' → Ordner '{folder_name}'")
+                return match_path
+
+        logger.info(f"  🔍 Kein Auto-Match für '{ma_name}' in {len(folders)} Ordnern")
+        return None
+    except Exception as e:
+        logger.warning(f"  ⚠️ Auto-Match Fehler: {e}")
+        return None
+
 
 def upload_to_onedrive(access_token: str, user_email: str, folder_path: str, filename: str, content: bytes) -> dict | None:
     """Lädt eine Datei in OneDrive hoch. Erstellt Ordner falls nötig."""
