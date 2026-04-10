@@ -1472,7 +1472,7 @@ async def process_sammel_pdf(
             erkannte += 1
             logger.info(f"  📄 Einzel-PDF erzeugt: {pdf_filename} | seiten={pages}")
 
-            ordner_pfad = f"{ma_ordner.strip('/')}/Gehaltsabrechnungen"
+            ordner_pfad = ma_ordner.strip('/')
             upload_result = upload_to_onedrive(access_token, mailbox_email, ordner_pfad, pdf_filename, pdf_einzeln)
 
             if not upload_result:
