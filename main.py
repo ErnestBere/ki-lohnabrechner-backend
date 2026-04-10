@@ -559,7 +559,7 @@ def create_mitarbeiter(ma: MitarbeiterStamm, user_token: dict = Depends(verify_f
         raise HTTPException(status_code=409, detail=f"Personalnummer {ma.personal_nr} existiert bereits.")
 
     # OneDrive-Ordner aus Name generieren falls leer
-    ordner = ma.onedrive_ordner or f"/Personal/{ma.name.replace(' ', '_')}"
+    ordner = ma.onedrive_ordner or ""
     data = ma.model_dump()
     data["onedrive_ordner"] = ordner
     data["erstellt_am"] = firestore.SERVER_TIMESTAMP
@@ -583,7 +583,7 @@ def update_mitarbeiter(ma_id: str, ma: MitarbeiterStamm, user_token: dict = Depe
         if doc.id != ma_id:
             raise HTTPException(status_code=409, detail=f"Personalnummer {ma.personal_nr} existiert bereits.")
 
-    ordner = ma.onedrive_ordner or f"/Personal/{ma.name.replace(' ', '_')}"
+    ordner = ma.onedrive_ordner or ""
     data = ma.model_dump()
     data["onedrive_ordner"] = ordner
     doc_ref.update(data)
@@ -1523,7 +1523,19 @@ async def process_sammel_pdf(
         info = data["info"]
         ma_name = ma.get("name", "Unbekannt")
         ma_email = ma.get("email", "")
-        ma_ordner = ma.get("onedrive_ordner", f"{onedrive_basispfad.strip('/')}/{ma_name.replace(' ', '_')}")
+        ma_ordner_config = ma.get("onedrive_ordner", "")
+        if ma_ordner_config and ma_ordner_config.strip() and ma_ordner_config.strip() != f"{onedrive_basispfad.strip('/')}/{ma_name.replace(' ', '_')}":
+            # Manuell konfigurierter Ordner
+            ma_ordner = ma_ordner_config.strip()
+        else:
+            # Auto-Match: Suche im Basispfad nach einem Ordner der den Namen enthält
+            matched = find_onedrive_folder_for_mitarbeiter(access_token, mailbox_email, onedrive_basispfad, ma_name)
+            if matched:
+                ma_ordner = matched
+            else:
+                # Fallback: Basispfad/Name_mit_Unterstrichen
+                ma_ordner = f"{onedrive_basispfad.strip('/')}/{ma_name.replace(' ', '_')}"
+                logger.info(f"  📁 Kein Auto-Match — Fallback-Ordner: {ma_ordner}")
         monat = info.abrechnungsmonat or "unbekannt"
 
         try:
