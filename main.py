@@ -90,7 +90,7 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL")
 BACKEND_API_SECRET = os.environ.get("BACKEND_API_SECRET")
 ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-pro-preview")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Graph API Scopes (anders als ki-buchhalter: Files statt Calendar/Planner)
 GRAPH_SCOPES = ["User.Read", "Mail.Read", "Mail.ReadWrite", "Mail.Send", "Files.ReadWrite.All"]
