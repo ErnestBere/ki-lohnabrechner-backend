@@ -664,6 +664,27 @@ def update_zahlungsstatus(update: ZahlungsStatusUpdate, user_token: dict = Depen
     return {"message": "Status aktualisiert."}
 
 
+@app.delete("/api/logs/{log_id}")
+def delete_log(log_id: str, user_token: dict = Depends(verify_firebase_token)):
+    """Einzelnen Verarbeitungs-Log löschen."""
+    tenant_id = user_token.get("tid") or user_token.get("uid")
+    db.collection("lohn_kunden").document(tenant_id).collection("verarbeitungs_logs").document(log_id).delete()
+    return {"message": "Log gelöscht."}
+
+
+@app.delete("/api/logs")
+def delete_all_logs(user_token: dict = Depends(verify_firebase_token)):
+    """Alle Verarbeitungs-Logs und Duplikat-Schutz löschen (Reset)."""
+    tenant_id = user_token.get("tid") or user_token.get("uid")
+    # Logs löschen
+    for doc in db.collection("lohn_kunden").document(tenant_id).collection("verarbeitungs_logs").stream():
+        doc.reference.delete()
+    # Duplikat-Schutz löschen
+    for doc in db.collection("lohn_processed_mails").stream():
+        doc.reference.delete()
+    return {"message": "Alle Logs und Duplikat-Schutz gelöscht."}
+
+
 # ==========================================
 # 📨 WEBHOOK: E-MAIL EMPFANG
 # ==========================================
