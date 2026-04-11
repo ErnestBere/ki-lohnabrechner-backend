@@ -1545,9 +1545,12 @@ async def process_sammel_pdf(
         ma_name = ma.get("name", "Unbekannt")
         ma_email = ma.get("email", "")
         ma_ordner_config = ma.get("onedrive_ordner", "")
-        if ma_ordner_config and ma_ordner_config.strip() and ma_ordner_config.strip() != f"{onedrive_basispfad.strip('/')}/{ma_name.replace(' ', '_')}":
-            # Manuell konfigurierter Ordner
-            ma_ordner = ma_ordner_config.strip()
+        basispfad_clean = onedrive_basispfad.strip('/')
+        if ma_ordner_config and ma_ordner_config.strip():
+            ma_ordner = ma_ordner_config.strip().strip('/')
+            # Basispfad voranstellen wenn nicht schon enthalten
+            if basispfad_clean and not ma_ordner.startswith(basispfad_clean):
+                ma_ordner = f"{basispfad_clean}/{ma_ordner}"
         else:
             # Auto-Match: Suche im Basispfad nach einem Ordner der den Namen enthält
             matched = find_onedrive_folder_for_mitarbeiter(access_token, mailbox_email, onedrive_basispfad, ma_name)
