@@ -1014,16 +1014,14 @@ def extract_from_ocr(page) -> tuple[dict, str]:
 def validate_with_gemini(page_bytes: bytes, page_num: int) -> GeminiSeitenInfo | None:
     """Stufe 3: Gemini Vision Validierung."""
     try:
+        document = types.Part.from_bytes(data=page_bytes, mime_type="application/pdf")
+        prompt = f"Analysiere Seite {page_num} dieser Lohnabrechnung. Extrahiere Mitarbeitername, Personalnummer, Abrechnungsmonat, Brutto-Betrag und Netto-Auszahlungsbetrag. Bei der Zahlungsübersicht: Extrahiere alle Zahlungspositionen mit Empfänger, Betrag, Verwendungszweck und Fälligkeit."
+
         response = gemini_client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=[
-                types.Content(parts=[
-                    types.Part.from_bytes(data=page_bytes, mime_type="application/pdf"),
-                    types.Part.from_text(text=f"Analysiere Seite {page_num} dieser Lohnabrechnung. Extrahiere Mitarbeitername, Personalnummer und Abrechnungsmonat."),
-                ])
-            ],
+            contents=[prompt, document],
             config=types.GenerateContentConfig(
-                system_instruction="Du bist ein Experte für deutsche DATEV-Lohnabrechnungen. Extrahiere präzise: Mitarbeitername, Personalnummer, Abrechnungsmonat. Bei geschwärzten Feldern: Null. Antworte NUR mit JSON.",
+                system_instruction="Du bist ein Experte für deutsche DATEV-Lohnabrechnungen. Extrahiere präzise: Mitarbeitername, Personalnummer, Abrechnungsmonat, Brutto, Netto. Bei Zahlungsübersichten: alle Zahlungspositionen. Bei geschwärzten Feldern: Null. Antworte NUR mit JSON.",
                 response_mime_type="application/json",
                 response_schema=GeminiSeitenInfo,
                 temperature=0.1,
@@ -1387,16 +1385,14 @@ def check_ist_lohnabrechnung(pdf_bytes: bytes, filename: str) -> bool:
     """Prüft per Gemini ob das PDF eine Lohnabrechnung ist. Schneller Check vor der Pipeline."""
     if not gemini_client:
         logger.warning("⚠️ Gemini nicht verfügbar — Vorab-Check übersprungen, PDF wird verarbeitet.")
-        return True  # Im Zweifel verarbeiten
+        return True
     try:
+        document = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+        prompt = "Ist dieses Dokument eine Lohn- oder Gehaltsabrechnung für einen oder mehrere Mitarbeiter? Antworte NUR mit JSON: {\"ist_lohnabrechnung\": true/false, \"begruendung\": \"kurze Begründung\"}"
+
         response = gemini_client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=[
-                types.Content(parts=[
-                    types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
-                    types.Part.from_text(text="Ist dieses Dokument eine Lohn- oder Gehaltsabrechnung für einen oder mehrere Mitarbeiter? Antworte NUR mit JSON: {\"ist_lohnabrechnung\": true/false, \"begruendung\": \"kurze Begründung\"}"),
-                ])
-            ],
+            contents=[prompt, document],
             config=types.GenerateContentConfig(
                 system_instruction="Du bist ein Experte für deutsche Lohnabrechnungen. Prüfe ob das Dokument eine DATEV-Lohnabrechnung, Gehaltsabrechnung oder Lohnauswertung ist. Rechnungen, Angebote, Verträge oder andere Dokumente sind KEINE Lohnabrechnungen.",
                 response_mime_type="application/json",
@@ -1411,7 +1407,7 @@ def check_ist_lohnabrechnung(pdf_bytes: bytes, filename: str) -> bool:
         return ist_lohn
     except Exception as e:
         logger.warning(f"⚠️ Gemini-Vorab-Check Fehler: {e} — PDF wird verarbeitet.")
-        return True  # Im Zweifel verarbeiten
+        return True
 
 
 # ==========================================
