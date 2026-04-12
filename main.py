@@ -874,8 +874,30 @@ async def m365_webhook(request: Request):
 
 
 # ==========================================
-# 📄 PARSER: 3-STUFEN-PIPELINE
+# � BETRAG-PARSING HILFSFUNKTION
 # ==========================================
+
+def parse_german_amount(raw: str) -> float | None:
+    """Parst einen deutschen Geldbetrag (z.B. '1.809,00' oder '1809,00' oder '1809.00')."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    # Deutsches Format: 1.809,00 → 1809.00
+    if "," in raw and "." in raw:
+        # Punkt ist Tausendertrenner, Komma ist Dezimaltrennzeichen
+        raw = raw.replace(".", "").replace(",", ".")
+    elif "," in raw:
+        # Nur Komma: könnte Dezimaltrennzeichen sein (1809,00)
+        parts = raw.split(",")
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            raw = raw.replace(",", ".")
+        else:
+            raw = raw.replace(",", "")
+    # Jetzt als float parsen
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 MONAT_MAP = {
     "Januar": "01", "Februar": "02", "März": "03", "April": "04",
@@ -1329,9 +1351,37 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
     if not voucher_date:
         voucher_date = datetime.datetime.now().strftime("%Y-%m-%d")
 
-    # Voucher erstellen mit Kategorie "Löhne & Gehälter"
-    # categoryId für "Löhne & Gehälter" (outgo) — Standard Lexoffice Kategorie
-    LOHN_CATEGORY_ID = "7aa1c922-fd87-11e1-a21f-0800200c9a66"
+    # Voucher erstellen — Kategorie per API holen
+    # Versuche "Löhne & Gehälter" Kategorie zu finden
+    cat_headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+    cat_res = requests.get("https://api.lexware.io/v1/posting-categories", headers=cat_headers)
+    lohn_category_id = None
+    if cat_res.status_code == 200:
+        for cat in cat_res.json():
+            name = cat.get("name", "").lower()
+            if any(kw in name for kw in ["lohn", "gehalt", "personal"]):
+                lohn_category_id = cat.get("id")
+                logger.info(f"  📂 Lexoffice Kategorie gefunden: {cat.get('name')} ({lohn_category_id})")
+                break
+
+    if not lohn_category_id:
+        # Fallback: erste outgo-Kategorie nehmen
+        if cat_res.status_code == 200:
+            for cat in cat_res.json():
+                if cat.get("type") == "outgo":
+                    lohn_category_id = cat.get("id")
+                    logger.info(f"  📂 Lexoffice Fallback-Kategorie: {cat.get('name')} ({lohn_category_id})")
+                    break
+
+    if not lohn_category_id:
+        logger.warning("  ⚠️ Keine Lexoffice Kategorie gefunden — einfacher Datei-Upload")
+        upload_headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+        files = {"file": (filename, pdf_bytes, "application/pdf")}
+        data = {"type": "voucher"}
+        res = requests.post("https://api.lexware.io/v1/files", headers=upload_headers, files=files, data=data)
+        if res.status_code == 202:
+            return res.json()
+        return None
 
     voucher_payload = {
         "type": "purchaseinvoice",
@@ -1347,7 +1397,7 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
             "amount": round(betrag, 2),
             "taxAmount": 0,
             "taxRatePercent": 0,
-            "categoryId": LOHN_CATEGORY_ID
+            "categoryId": lohn_category_id
         }]
     }
 
