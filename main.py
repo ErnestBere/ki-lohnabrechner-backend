@@ -157,6 +157,12 @@ class MitarbeiterStamm(BaseModel):
     email: str
     onedrive_ordner: Optional[str] = None
 
+class ZahlungspositionSchema(BaseModel):
+    empfaenger: str = Field(description="Name des Zahlungsempfängers, z.B. 'Maximilian Schmidt' oder 'AOK Rheinland'")
+    betrag: float = Field(description="Überweisungsbetrag in Euro als Dezimalzahl, z.B. 581.29")
+    verwendungszweck: Optional[str] = Field(default=None, description="Verwendungszweck der Zahlung, z.B. 'Lohn- und Gehaltszahlungen' oder 'Betriebliche Altersvorsorge'")
+    faelligkeit: Optional[str] = Field(default=None, description="Fälligkeitsdatum im Format TT.MM.JJJJ, z.B. '31.03.2026'")
+
 class GeminiSeitenInfo(BaseModel):
     ist_lohnabrechnung: bool = Field(description="True wenn die Seite eine individuelle Lohn-/Gehaltsabrechnung ist")
     mitarbeiter_name: Optional[str] = Field(default=None, description="Vollständiger Name des Mitarbeiters")
@@ -167,7 +173,7 @@ class GeminiSeitenInfo(BaseModel):
     netto_betrag: Optional[float] = Field(default=None, description="Auszahlungsbetrag/Netto in Euro (nur bei Lohnabrechnung)")
     gesamt_brutto: Optional[float] = Field(default=None, description="Summe aller Brutto-Gehälter (nur bei Zahlungsübersicht)")
     gesamt_netto: Optional[float] = Field(default=None, description="Summe aller Netto-Auszahlungen (nur bei Zahlungsübersicht)")
-    zahlungspositionen: Optional[List[dict]] = Field(default=None, description="Liste der Zahlungen aus der Zahlungsübersicht. Jeder Eintrag: {empfaenger: str, betrag: float, verwendungszweck: str, faelligkeit: str|null}. Nur bei Zahlungsübersicht.")
+    zahlungspositionen: Optional[List[ZahlungspositionSchema]] = Field(default=None, description="Liste ALLER einzelnen Zahlungen/Überweisungen aus der Zahlungsübersicht. Jede Zeile mit Empfänger und Betrag ist eine Position.")
 
 class LohnSeitenInfo(BaseModel):
     seite: int
@@ -1129,11 +1135,14 @@ def process_page(page, page_num: int) -> LohnSeitenInfo:
 
         info.abrechnungsmonat = local_monat or gemini_info.abrechnungsmonat
         info.ist_lohnabrechnung = gemini_info.ist_lohnabrechnung
-        info.typ = gemini_info.seitentyp if gemini_info.ist_lohnabrechnung else local_typ
+        info.typ = gemini_info.seitentyp or local_typ
         info.quelle = f"{local_quelle}+gemini"
         if gemini_info.zahlungspositionen:
-            info.zahlungspositionen = gemini_info.zahlungspositionen
-            info.gesamtsumme = sum(z.get("betrag", 0) for z in gemini_info.zahlungspositionen if z.get("betrag"))
+            info.zahlungspositionen = [z.model_dump() if hasattr(z, 'model_dump') else z for z in gemini_info.zahlungspositionen]
+            info.gesamtsumme = sum(
+                (z.betrag if hasattr(z, 'betrag') else z.get("betrag", 0)) or 0
+                for z in gemini_info.zahlungspositionen
+            )
 
         # Beträge: Gemini hat Vorrang (zuverlässiger als OCR bei Zahlen)
         # OCR nur als Fallback wenn Gemini keinen Betrag liefert
@@ -1684,14 +1693,9 @@ async def process_sammel_pdf(
     message = f"{erkannte} Mitarbeiter verarbeitet, {fehler} Fehler, {unklar} nicht zugeordnet"
     
     # Gesamt-Beträge aus den Seiten-Details berechnen
+    # Nur Lohnabrechnungen summieren (nicht die Zahlungsübersicht — die enthält auch Nicht-Gehalt-Zahlungen)
     sum_brutto = sum(s.brutto_betrag for s in seiten_details if s.brutto_betrag and s.typ == "lohnabrechnung")
     sum_netto = sum(s.netto_betrag for s in seiten_details if s.netto_betrag and s.typ == "lohnabrechnung")
-    # Zahlungsübersicht-Beträge (falls vorhanden)
-    for s in seiten_details:
-        if s.typ == "zahlungsuebersicht" and s.brutto_betrag:
-            sum_brutto = s.brutto_betrag  # Übersicht hat die offiziellen Summen
-        if s.typ == "zahlungsuebersicht" and s.netto_betrag:
-            sum_netto = s.netto_betrag
 
     try:
         write_verarbeitungs_log(tenant_id, filename, gesamt_seiten, erkannte, fehler, unklar, status, message, seiten_details, sum_brutto, sum_netto)
