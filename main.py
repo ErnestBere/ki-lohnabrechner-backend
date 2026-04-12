@@ -1131,28 +1131,16 @@ def process_page(page, page_num: int) -> LohnSeitenInfo:
         info.ist_lohnabrechnung = gemini_info.ist_lohnabrechnung
         info.typ = gemini_info.seitentyp if gemini_info.ist_lohnabrechnung else local_typ
         info.quelle = f"{local_quelle}+gemini"
-        info.brutto_betrag = gemini_info.brutto_betrag or gemini_info.gesamt_brutto
-        info.netto_betrag = gemini_info.netto_betrag or gemini_info.gesamt_netto
         if gemini_info.zahlungspositionen:
             info.zahlungspositionen = gemini_info.zahlungspositionen
             info.gesamtsumme = sum(z.get("betrag", 0) for z in gemini_info.zahlungspositionen if z.get("betrag"))
 
-        # Kreuzvalidierung: OCR/Text-Beträge vs. Gemini-Beträge
+        # Beträge: Gemini hat Vorrang (zuverlässiger als OCR bei Zahlen)
+        # OCR nur als Fallback wenn Gemini keinen Betrag liefert
         g_brutto = gemini_info.brutto_betrag or gemini_info.gesamt_brutto
         g_netto = gemini_info.netto_betrag or gemini_info.gesamt_netto
-        betrag_ok = True
-        if local_brutto and g_brutto and abs(local_brutto - g_brutto) > 0.02:
-            betrag_ok = False
-            logger.warning(f"  ⚠️ Betrag-Abweichung Seite {page_num}: Brutto lokal={local_brutto} vs. Gemini={g_brutto}")
-        if local_netto and g_netto and abs(local_netto - g_netto) > 0.02:
-            betrag_ok = False
-            logger.warning(f"  ⚠️ Betrag-Abweichung Seite {page_num}: Netto lokal={local_netto} vs. Gemini={g_netto}")
-        if not betrag_ok:
-            info.betrag_warnung = "Bitte manuell prüfen — OCR und KI liefern unterschiedliche Beträge"
-        # Wenn nur eine Quelle Beträge hat, auch warnen
-        elif (local_brutto and not g_brutto) or (g_brutto and not local_brutto):
-            if info.ist_lohnabrechnung:
-                info.betrag_warnung = "Betrag nur aus einer Quelle — bitte manuell prüfen"
+        info.brutto_betrag = g_brutto or local_brutto
+        info.netto_betrag = g_netto or local_netto
     else:
         info.mitarbeiter_name = local_name
         info.personal_nr = local_pnr
