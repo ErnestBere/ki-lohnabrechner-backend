@@ -1037,19 +1037,36 @@ def validate_with_gemini(page_bytes: bytes, page_num: int) -> GeminiSeitenInfo |
     """Stufe 3: Gemini Vision Validierung."""
     try:
         document = types.Part.from_bytes(data=page_bytes, mime_type="application/pdf")
-        prompt = f"Analysiere Seite {page_num} dieser Lohnabrechnung. Extrahiere Mitarbeitername, Personalnummer, Abrechnungsmonat, Brutto-Betrag und Netto-Auszahlungsbetrag. Bei der Zahlungsübersicht: Extrahiere alle Zahlungspositionen mit Empfänger, Betrag, Verwendungszweck und Fälligkeit."
-
+        prompt = (
+            f"Analysiere diese Seite einer deutschen DATEV-Lohnabrechnung (Seite {page_num}). "
+            "Falls es eine Zahlungsübersicht ist ('Übersicht Zahlungen'): "
+            "Extrahiere ALLE Zahlungspositionen mit Empfänger, Betrag, Verwendungszweck und Fälligkeit. "
+            "Auch 'Lohn- und Gehaltszahlungen' und 'Betriebliche Altersvorsorge' sind Positionen. "
+            "Falls es eine individuelle Lohnabrechnung ist: "
+            "Extrahiere Mitarbeitername, Personalnummer, Abrechnungsmonat, Gesamt-Brutto und Netto-Auszahlung."
+        )
         response = gemini_client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[prompt, document],
             config=types.GenerateContentConfig(
-                system_instruction="Du bist ein Experte für deutsche DATEV-Lohnabrechnungen. Extrahiere präzise: Mitarbeitername, Personalnummer, Abrechnungsmonat, Brutto, Netto. Bei Zahlungsübersichten: alle Zahlungspositionen. Bei geschwärzten Feldern: Null. Antworte NUR mit JSON.",
+                system_instruction=(
+                    "Du bist ein Experte für deutsche DATEV-Lohnabrechnungen. "
+                    "Bei Zahlungsübersichten: Extrahiere ALLE Zeilen mit Empfänger und Betrag als zahlungspositionen. "
+                    "Beträge im Format '1.234,56' als Dezimalzahl (1234.56). "
+                    "Fälligkeitsdaten aus dem Text 'Fälligkeit bis: TT.MM.JJJJ' extrahieren. "
+                    "Bei Lohnabrechnungen: Name, PNr, Monat, Brutto, Netto. "
+                    "Antworte NUR mit JSON."
+                ),
                 response_mime_type="application/json",
                 response_schema=GeminiSeitenInfo,
                 temperature=0.1,
             ),
         )
-        return GeminiSeitenInfo.model_validate_json(response.text)
+        result = GeminiSeitenInfo.model_validate_json(response.text)
+        # Debug-Log für Zahlungsübersicht
+        if result.zahlungspositionen:
+            logger.info(f"  💰 Zahlungsübersicht Seite {page_num}: {len(result.zahlungspositionen)} Positionen extrahiert")
+        return result
     except Exception as e:
         logger.warning(f"⚠️ Gemini-Fehler Seite {page_num}: {e}")
         return None
