@@ -7,14 +7,96 @@ Architektur identisch zum ki-buchhalter: FastAPI + Cloud Run + Firestore + MSAL 
 
 import os
 import logging
+import uuid
+import time
+import json as _json
+from contextvars import ContextVar
 
-# Strukturiertes Logging für Cloud Run
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(levelname)s %(asctime)s %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%SZ"
-)
-logger = logging.getLogger(__name__)
+# ==========================================
+# 📊 STRUKTURIERTES JSON-LOGGING FÜR CLOUD RUN
+# ==========================================
+
+# Korrelations-ID pro Request/Verarbeitung (Thread-safe via ContextVar)
+_processing_id: ContextVar[str] = ContextVar("processing_id", default="–")
+
+
+class CloudRunJsonFormatter(logging.Formatter):
+    """Strukturiertes JSON-Logging für Google Cloud Run / Cloud Logging.
+    Cloud Logging erkennt das 'severity'-Feld automatisch und parsed die JSON-Struktur."""
+
+    SEVERITY_MAP = {
+        logging.DEBUG: "DEBUG",
+        logging.INFO: "INFO",
+        logging.WARNING: "WARNING",
+        logging.ERROR: "ERROR",
+        logging.CRITICAL: "CRITICAL",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "severity": self.SEVERITY_MAP.get(record.levelno, "DEFAULT"),
+            "message": record.getMessage(),
+            "processing_id": _processing_id.get("–"),
+            "logger": record.name,
+        }
+        # Zusätzliche Felder aus extra-Dict übernehmen
+        if hasattr(record, "extra_fields"):
+            log_entry.update(record.extra_fields)
+        # Stacktrace bei Exceptions
+        if record.exc_info and record.exc_info[0]:
+            log_entry["stack_trace"] = self.formatException(record.exc_info)
+        return _json.dumps(log_entry, ensure_ascii=False, default=str)
+
+
+# Logger konfigurieren
+_handler = logging.StreamHandler()
+_handler.setFormatter(CloudRunJsonFormatter())
+logging.root.handlers = [_handler]
+logging.root.setLevel(logging.INFO)
+logger = logging.getLogger("ki-lohnabrechner")
+
+
+def mask_email(email: str | None) -> str:
+    """Maskiert E-Mail-Adressen für DSGVO-konformes Logging. max@example.de → m***@e***.de"""
+    if not email:
+        return "–"
+    parts = email.split("@")
+    if len(parts) != 2:
+        return "***"
+    local = parts[0][0] + "***" if len(parts[0]) > 0 else "***"
+    domain_parts = parts[1].split(".")
+    if len(domain_parts) >= 2:
+        domain = domain_parts[0][0] + "***." + domain_parts[-1]
+    else:
+        domain = "***"
+    return f"{local}@{domain}"
+
+
+def mask_tenant(tenant_id: str | None) -> str:
+    """Maskiert Tenant-IDs. abc123-def456 → abc1***f456"""
+    if not tenant_id:
+        return "–"
+    if len(tenant_id) > 8:
+        return tenant_id[:4] + "***" + tenant_id[-4:]
+    return "***"
+
+
+def new_processing_id() -> str:
+    """Erzeugt eine neue Korrelations-ID und setzt sie im aktuellen Context."""
+    pid = uuid.uuid4().hex[:12]
+    _processing_id.set(pid)
+    return pid
+
+
+def log_with_fields(level: int, msg: str, **fields):
+    """Loggt eine Nachricht mit zusätzlichen strukturierten Feldern."""
+    record = logger.makeRecord(
+        logger.name, level, "(unknown)", 0, msg, (), None
+    )
+    record.extra_fields = fields
+    logger.handle(record)
+
+
 import requests
 import msal
 import secrets
@@ -302,7 +384,7 @@ def handle_token_error(token_result: dict, tenant_id: str, mailbox_email: str):
     if "error" in token_result:
         error_code = token_result.get("error")
         if error_code in ["invalid_grant", "interaction_required"]:
-            logger.error(f"🚨 AUTH-FEHLER: Token für {mailbox_email} (Tenant: {tenant_id}) abgelaufen!")
+            logger.error(f"AUTH-FEHLER: Token abgelaufen für {mask_email(mailbox_email)} (Tenant: {mask_tenant(tenant_id)})")
             try:
                 db.collection("lohn_kunden").document(tenant_id).collection("postfaecher").document(mailbox_email).update({
                     "auth_status": "disconnected",
@@ -670,6 +752,37 @@ def update_zahlungsstatus(update: ZahlungsStatusUpdate, user_token: dict = Depen
     return {"message": "Status aktualisiert."}
 
 
+@app.get("/api/logs")
+def get_logs(user_token: dict = Depends(verify_firebase_token)):
+    """Alle Verarbeitungs-Logs mit entschlüsselten Gehaltsdaten laden."""
+    tenant_id = user_token.get("tid") or user_token.get("uid")
+    logs = []
+    for doc in db.collection("lohn_kunden").document(tenant_id).collection("verarbeitungs_logs").order_by("timestamp", direction="DESCENDING").limit(100).stream():
+        log_data = doc.to_dict()
+        log_data["id"] = doc.id
+        # Gesamt-Beträge entschlüsseln
+        if log_data.get("gesamt_brutto_enc"):
+            try:
+                log_data["gesamt_brutto"] = float(decrypt_data(log_data["gesamt_brutto_enc"]))
+            except Exception:
+                log_data["gesamt_brutto"] = None
+            del log_data["gesamt_brutto_enc"]
+        if log_data.get("gesamt_netto_enc"):
+            try:
+                log_data["gesamt_netto"] = float(decrypt_data(log_data["gesamt_netto_enc"]))
+            except Exception:
+                log_data["gesamt_netto"] = None
+            del log_data["gesamt_netto_enc"]
+        # Seiten-Details entschlüsseln
+        if log_data.get("seiten_details"):
+            log_data["seiten_details"] = _decrypt_seiten_details(log_data["seiten_details"])
+        # Timestamp serialisieren
+        if log_data.get("timestamp"):
+            log_data["timestamp"] = log_data["timestamp"].isoformat() if hasattr(log_data["timestamp"], "isoformat") else str(log_data["timestamp"])
+        logs.append(log_data)
+    return {"logs": logs}
+
+
 @app.delete("/api/logs/{log_id}")
 def delete_log(log_id: str, user_token: dict = Depends(verify_firebase_token)):
     """Einzelnen Verarbeitungs-Log löschen."""
@@ -702,7 +815,9 @@ async def m365_webhook(request: Request):
     if "validationToken" in request.query_params:
         return Response(content=request.query_params["validationToken"], media_type="text/plain", status_code=200)
 
-    logger.info("🔔 LOHN-WEBHOOK EMPFANGEN!")
+    pid = new_processing_id()
+    webhook_start = time.time()
+    log_with_fields(logging.INFO, "Webhook empfangen", event="webhook_received")
     body = await request.json()
 
     for value in body.get("value", []):
@@ -717,7 +832,7 @@ async def m365_webhook(request: Request):
         # Duplikat-Schutz
         mail_doc_ref = db.collection("lohn_processed_mails").document(message_id)
         if mail_doc_ref.get().exists:
-            logger.info("⏭️ Mail bereits verarbeitet.")
+            log_with_fields(logging.INFO, "Mail bereits verarbeitet — übersprungen", event="duplicate_skipped")
             continue
 
         mail_doc_ref.set({"status": "processing", "received_at": firestore.SERVER_TIMESTAMP})
@@ -733,13 +848,13 @@ async def m365_webhook(request: Request):
             break
 
         if not postfach:
-            logger.warning("⚠️ Kein passendes Postfach gefunden.")
+            log_with_fields(logging.WARNING, "Kein passendes Postfach gefunden", event="postfach_not_found", tenant=mask_tenant(customer_tenant_id))
             continue
 
         # clientState-Validierung
         erwarteter_state = postfach.get("client_state")
         if erwarteter_state and incoming_client_state != erwarteter_state:
-            logger.error(f"🚨 SICHERHEITSWARNUNG: Falscher clientState! Webhook ignoriert.")
+            log_with_fields(logging.ERROR, "SICHERHEITSWARNUNG: Falscher clientState — Webhook ignoriert", event="security_client_state_mismatch", tenant=mask_tenant(customer_tenant_id))
             continue
 
         # Tenant-Daten laden
@@ -766,7 +881,7 @@ async def m365_webhook(request: Request):
 
         # E-Mail-Metadaten laden
         mail_res = requests.get(f"https://graph.microsoft.com/v1.0/{resource_path}?$select=subject,from,body", headers=headers)
-        betreff_filter_match = False  # Wird True wenn Betreff-Filter konfiguriert und gematcht
+        betreff_filter_match = False
         if mail_res.status_code == 200:
             mail_data = mail_res.json()
             mail_sender = mail_data.get("from", {}).get("emailAddress", {}).get("address", "").lower()
@@ -775,25 +890,25 @@ async def m365_webhook(request: Request):
 
             # Absender-Filter
             if STEUERBUERO_ABSENDER and mail_sender != STEUERBUERO_ABSENDER:
-                logger.info(f"⏭️ Absender-Filter: {mail_sender} != {STEUERBUERO_ABSENDER}")
+                log_with_fields(logging.INFO, "Absender-Filter: kein Match", event="filter_sender_skip", sender=mask_email(mail_sender))
                 continue
 
-            # Betreff-Filter (optional): mindestens einer muss matchen
+            # Betreff-Filter
             filter_betreff = kunde.get("filter_betreff", [])
             if filter_betreff:
                 if any(f.lower() in mail_subject for f in filter_betreff):
                     betreff_filter_match = True
                 else:
-                    logger.info(f"⏭️ Betreff-Filter: kein Match | betreff={mail_subject[:80]}")
+                    log_with_fields(logging.INFO, "Betreff-Filter: kein Match", event="filter_subject_skip")
                     continue
             else:
-                betreff_filter_match = True  # Kein Filter = immer Match
+                betreff_filter_match = True
 
-            # Inhalt-Filter (optional): mindestens einer muss matchen
+            # Inhalt-Filter
             filter_inhalt = kunde.get("filter_inhalt", [])
             if filter_inhalt:
                 if not any(f.lower() in mail_body for f in filter_inhalt):
-                    logger.info(f"⏭️ Inhalt-Filter: kein Match")
+                    log_with_fields(logging.INFO, "Inhalt-Filter: kein Match", event="filter_content_skip")
                     continue
 
         # PDF-Anhänge laden
@@ -812,10 +927,10 @@ async def m365_webhook(request: Request):
                 continue
 
             pdf_found = True
-            MAX_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
+            MAX_SIZE_BYTES = 25 * 1024 * 1024
 
             if att_size > MAX_SIZE_BYTES:
-                logger.warning(f"🛡️ PDF zu groß: {att_filename} ({att_size / 1024 / 1024:.1f} MB)")
+                log_with_fields(logging.WARNING, f"PDF zu groß: {att_filename}", event="pdf_too_large", size_mb=round(att_size / 1024 / 1024, 1))
                 send_notification_email(
                     token_result["access_token"], MAILBOX_EMAIL,
                     f"PDF zu groß: {att_filename}",
@@ -824,15 +939,15 @@ async def m365_webhook(request: Request):
                 )
                 continue
 
-            logger.info(f"⬇️ Lade '{att_filename}' ({att_size / 1024 / 1024:.2f} MB)...")
+            log_with_fields(logging.INFO, f"PDF-Download gestartet: {att_filename}", event="pdf_download", size_mb=round(att_size / 1024 / 1024, 2))
             content_url = f"https://graph.microsoft.com/v1.0/{resource_path}/attachments/{att_id}"
             content_res = requests.get(content_url, headers=headers)
             pdf_base64 = content_res.json().get("contentBytes")
             filename = att_filename
-            break  # Erste PDF reicht
+            break
 
         if not pdf_found:
-            logger.warning("⚠️ Keine PDF-Anhänge gefunden.")
+            log_with_fields(logging.WARNING, "Keine PDF-Anhänge gefunden", event="no_pdf_attachment")
             if betreff_filter_match:
                 # Betreff hat gematcht aber keine PDF → Admin benachrichtigen
                 send_notification_email(
@@ -845,11 +960,11 @@ async def m365_webhook(request: Request):
             pdf_bytes = base64.b64decode(pdf_base64)
 
             # Gemini-Vorab-Check: Ist das eine Lohnabrechnung?
-            logger.info(f"🔍 Gemini-Vorab-Check: Ist '{filename}' eine Lohnabrechnung?")
+            log_with_fields(logging.INFO, f"Gemini-Vorab-Check gestartet: {filename}", event="gemini_precheck_start")
             ist_lohnabrechnung = check_ist_lohnabrechnung(pdf_bytes, filename)
 
             if not ist_lohnabrechnung:
-                logger.warning(f"⏭️ Gemini: '{filename}' ist keine Lohnabrechnung — Verarbeitung abgebrochen.")
+                log_with_fields(logging.WARNING, f"Gemini: '{filename}' ist keine Lohnabrechnung", event="gemini_precheck_rejected", datei=filename)
                 if betreff_filter_match:
                     send_notification_email(
                         token_result["access_token"], MAILBOX_EMAIL,
@@ -1071,10 +1186,10 @@ def validate_with_gemini(page_bytes: bytes, page_num: int) -> GeminiSeitenInfo |
         result = GeminiSeitenInfo.model_validate_json(response.text)
         # Debug-Log für Zahlungsübersicht
         if result.zahlungspositionen:
-            logger.info(f"  💰 Zahlungsübersicht Seite {page_num}: {len(result.zahlungspositionen)} Positionen extrahiert")
+            log_with_fields(logging.INFO, f"Zahlungsübersicht Seite {page_num}: {len(result.zahlungspositionen)} Positionen", event="zahlungspositionen_extracted", seite=page_num, anzahl=len(result.zahlungspositionen))
         return result
     except Exception as e:
-        logger.warning(f"⚠️ Gemini-Fehler Seite {page_num}: {e}")
+        log_with_fields(logging.WARNING, f"Gemini-Fehler Seite {page_num}", event="gemini_page_error", seite=page_num, fehler=str(e))
         return None
 
 
@@ -1265,10 +1380,10 @@ def upload_to_onedrive(access_token: str, user_email: str, folder_path: str, fil
     res = requests.put(upload_url, headers={**headers, "Content-Type": "application/pdf"}, data=content)
 
     if res.status_code in [200, 201]:
-        logger.info(f"  📁 OneDrive: {folder_path}/{filename} hochgeladen.")
+        log_with_fields(logging.INFO, f"OneDrive Upload OK: {folder_path}/{filename}", event="onedrive_file_uploaded", ordner=folder_path, datei=filename)
         return res.json()
     else:
-        logger.error(f"  ❌ OneDrive Upload fehlgeschlagen: {res.status_code} {res.text[:200]}")
+        log_with_fields(logging.ERROR, f"OneDrive Upload fehlgeschlagen", event="onedrive_file_upload_failed", status_code=res.status_code, ordner=folder_path, datei=filename)
         return None
 
 
@@ -1298,10 +1413,10 @@ def create_draft_email(access_token: str, user_email: str, to_email: str, subjec
     res = requests.post(f"https://graph.microsoft.com/v1.0/users/{user_email}/messages", headers=headers, json=payload)
 
     if res.status_code == 201:
-        logger.info(f"  ✉️ Entwurf erstellt für {to_email}")
+        log_with_fields(logging.INFO, f"Entwurf erstellt für {mask_email(to_email)}", event="draft_email_created", empfaenger=mask_email(to_email))
         return res.json()
     else:
-        logger.error(f"  ❌ Entwurf fehlgeschlagen: {res.status_code} {res.text[:200]}")
+        log_with_fields(logging.ERROR, "Entwurf fehlgeschlagen", event="draft_email_failed", status_code=res.status_code, empfaenger=mask_email(to_email))
         return None
 
 
@@ -1319,9 +1434,9 @@ def send_notification_email(access_token: str, mailbox_email: str, subject: str,
     }
     res = requests.post(f"https://graph.microsoft.com/v1.0/users/{mailbox_email}/sendMail", headers=headers, json=payload)
     if res.status_code not in [200, 202]:
-        logger.error(f"❌ Benachrichtigungs-Mail fehlgeschlagen: {res.status_code} {res.text[:300]}")
+        log_with_fields(logging.ERROR, "Benachrichtigungs-Mail fehlgeschlagen", event="notification_email_failed", status_code=res.status_code, empfaenger=mask_email(recipient))
     else:
-        logger.info(f"📧 Benachrichtigungs-Mail gesendet an {recipient}: {subject}")
+        log_with_fields(logging.INFO, f"Benachrichtigungs-Mail gesendet: {subject}", event="notification_email_sent", empfaenger=mask_email(recipient), betreff=subject)
 
 
 # ==========================================
@@ -1448,9 +1563,10 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
 def check_ist_lohnabrechnung(pdf_bytes: bytes, filename: str) -> bool:
     """Prüft per Gemini ob das PDF eine Lohnabrechnung ist. Schneller Check vor der Pipeline."""
     if not gemini_client:
-        logger.warning("⚠️ Gemini nicht verfügbar — Vorab-Check übersprungen, PDF wird verarbeitet.")
+        log_with_fields(logging.WARNING, "Gemini nicht verfügbar — Vorab-Check übersprungen", event="gemini_unavailable")
         return True
     try:
+        t0 = time.time()
         document = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
         prompt = "Ist dieses Dokument eine Lohn- oder Gehaltsabrechnung für einen oder mehrere Mitarbeiter? Antworte NUR mit JSON: {\"ist_lohnabrechnung\": true/false, \"begruendung\": \"kurze Begründung\"}"
 
@@ -1463,14 +1579,13 @@ def check_ist_lohnabrechnung(pdf_bytes: bytes, filename: str) -> bool:
                 temperature=0.1,
             ),
         )
-        import json as _json
         result = _json.loads(response.text)
         ist_lohn = result.get("ist_lohnabrechnung", False)
         begruendung = result.get("begruendung", "")
-        logger.info(f"🔍 Gemini-Check: ist_lohnabrechnung={ist_lohn} | {begruendung}")
+        log_with_fields(logging.INFO, f"Gemini-Vorab-Check abgeschlossen", event="gemini_precheck_done", ist_lohnabrechnung=ist_lohn, begruendung=begruendung, dauer_sek=round(time.time() - t0, 1))
         return ist_lohn
     except Exception as e:
-        logger.warning(f"⚠️ Gemini-Vorab-Check Fehler: {e} — PDF wird verarbeitet.")
+        log_with_fields(logging.WARNING, f"Gemini-Vorab-Check Fehler: {e}", event="gemini_precheck_error")
         return True
 
 
@@ -1492,9 +1607,9 @@ async def process_sammel_pdf(
     benachrichtigungs_email: str | None = None,
 ):
     """Hauptpipeline: Sammel-PDF zerlegen, zuordnen, ablegen, Entwürfe erstellen."""
-    # Fallback: Fehler-Mails gehen an die Mailbox selbst
+    pipeline_start = time.time()
     notif_email = benachrichtigungs_email or mailbox_email
-    logger.info(f"🔄 PIPELINE START | tenant={tenant_id} | datei={filename}")
+    log_with_fields(logging.INFO, f"Pipeline gestartet: {filename}", event="pipeline_start", datei=filename, tenant=mask_tenant(tenant_id))
 
     seiten_details = []
     erkannte = 0
@@ -1504,23 +1619,23 @@ async def process_sammel_pdf(
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception as e:
-        logger.error(f"❌ PDF nicht lesbar | datei={filename} | fehler={e}")
+        log_with_fields(logging.ERROR, f"PDF nicht lesbar: {filename}", event="pdf_unreadable", datei=filename, fehler=str(e))
         try:
             send_notification_email(access_token, mailbox_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}", to_email=notif_email)
         except Exception as mail_err:
-            logger.error(f"❌ Info-Mail fehlgeschlagen: {mail_err}")
+            log_with_fields(logging.ERROR, "Info-Mail fehlgeschlagen", event="notification_failed", fehler=str(mail_err))
         write_verarbeitungs_log(tenant_id, filename, 0, 0, 1, 0, "error", f"PDF nicht lesbar: {e}", [])
         return
 
     gesamt_seiten = doc.page_count
-    logger.info(f"📄 PDF geöffnet | seiten={gesamt_seiten} | datei={filename}")
+    log_with_fields(logging.INFO, f"PDF geöffnet: {gesamt_seiten} Seiten", event="pdf_opened", datei=filename, seiten=gesamt_seiten)
 
     # Temporär in OneDrive speichern
     try:
         upload_to_onedrive(access_token, mailbox_email, "_TEMP", filename, pdf_bytes)
-        logger.info(f"💾 Temp-Upload OK | pfad=_TEMP/{filename}")
+        log_with_fields(logging.INFO, "Temp-Upload OK", event="temp_upload_ok", datei=filename)
     except Exception as e:
-        logger.warning(f"⚠️ Temp-Upload fehlgeschlagen (nicht kritisch): {e}")
+        log_with_fields(logging.WARNING, "Temp-Upload fehlgeschlagen (nicht kritisch)", event="temp_upload_failed", fehler=str(e))
 
     # Mitarbeiter-Stammdaten laden
     stammdaten = []
@@ -1529,26 +1644,33 @@ async def process_sammel_pdf(
             ma = ma_doc.to_dict()
             ma["id"] = ma_doc.id
             stammdaten.append(ma)
-        logger.info(f"👥 Stammdaten geladen | anzahl={len(stammdaten)}")
+        log_with_fields(logging.INFO, f"Stammdaten geladen: {len(stammdaten)} Mitarbeiter", event="stammdaten_loaded", anzahl=len(stammdaten))
     except Exception as e:
-        logger.error(f"❌ Stammdaten-Fehler: {e}")
+        log_with_fields(logging.ERROR, "Stammdaten-Fehler", event="stammdaten_error", fehler=str(e))
 
     # Seiten verarbeiten und nach Mitarbeiter gruppieren
     seiten_ergebnisse = []
+    parse_start = time.time()
     for i in range(gesamt_seiten):
         page = doc[i]
         page_num = i + 1
+        page_start = time.time()
         try:
             info = process_page(page, page_num)
             seiten_ergebnisse.append(info)
-            logger.info(f"  Seite {page_num}: typ={info.typ} | name={info.mitarbeiter_name or '–'} | pnr={info.personal_nr or '–'} | quelle={info.quelle} | validierung={info.validierung}")
+            log_with_fields(logging.INFO, f"Seite {page_num} verarbeitet", event="page_processed",
+                seite=page_num, typ=info.typ, name=info.mitarbeiter_name or "–",
+                pnr=info.personal_nr or "–", quelle=info.quelle,
+                validierung=info.validierung, dauer_sek=round(time.time() - page_start, 1))
         except Exception as e:
-            logger.error(f"❌ Fehler Seite {page_num}: {e}", exc_info=True)
+            log_with_fields(logging.ERROR, f"Fehler bei Seite {page_num}", event="page_error", seite=page_num, fehler=str(e))
             fehler += 1
             seiten_details.append(SeitenDetail(
                 seite=page_num, typ="fehler", status="fehler",
                 quelle="", validierung="", fehler_details=str(e)
             ))
+    parse_dauer = round(time.time() - parse_start, 1)
+    log_with_fields(logging.INFO, f"Parsing abgeschlossen: {len(seiten_ergebnisse)} Seiten in {parse_dauer}s", event="parsing_done", seiten=len(seiten_ergebnisse), dauer_sek=parse_dauer)
 
     # Nach Mitarbeiter gruppieren (mehrseitige Abrechnungen zusammenfassen)
     mitarbeiter_seiten: dict[str, list] = {}
@@ -1577,17 +1699,17 @@ async def process_sammel_pdf(
                 brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag,
                 betrag_warnung=info.betrag_warnung
             ))
-            logger.info(f"  ✅ Zugeordnet: {info.mitarbeiter_name} → {ma.get('name')} (PNr: {ma.get('personal_nr')})")
+            log_with_fields(logging.INFO, f"Zugeordnet: {info.mitarbeiter_name} → {ma.get('name')}", event="mitarbeiter_zugeordnet", seite=info.seite, mitarbeiter=ma.get("name"), pnr=ma.get("personal_nr"))
         else:
             unklar += 1
-            logger.warning(f"  ⚠️ Nicht zuordenbar: name={info.mitarbeiter_name} | pnr={info.personal_nr}")
+            log_with_fields(logging.WARNING, f"Nicht zuordenbar: {info.mitarbeiter_name or '–'}", event="mitarbeiter_unklar", seite=info.seite, name=info.mitarbeiter_name, pnr=info.personal_nr)
             try:
                 pdf_einzeln = create_single_pdf(doc, [info.seite])
                 unklar_name = f"Unklar_{info.mitarbeiter_name.replace(' ', '_') + '_' if info.mitarbeiter_name else ''}Seite_{info.seite}_{filename}"
                 upload_to_onedrive(access_token, mailbox_email, f"{onedrive_basispfad.strip('/')}/_Unklar", unklar_name, pdf_einzeln)
-                logger.info(f"  💾 Unklar abgelegt: {unklar_name}")
+                log_with_fields(logging.INFO, f"Unklar abgelegt: {unklar_name}", event="unklar_uploaded", datei=unklar_name)
             except Exception as e:
-                logger.error(f"  ❌ Unklar-Upload fehlgeschlagen: {e}", exc_info=True)
+                log_with_fields(logging.ERROR, "Unklar-Upload fehlgeschlagen", event="unklar_upload_failed", fehler=str(e))
             seiten_details.append(SeitenDetail(
                 seite=info.seite, typ=info.typ, mitarbeiter_name=info.mitarbeiter_name,
                 personal_nr=info.personal_nr, status="unklar",
@@ -1619,31 +1741,31 @@ async def process_sammel_pdf(
             else:
                 # Fallback: Basispfad/Name_mit_Unterstrichen
                 ma_ordner = f"{onedrive_basispfad.strip('/')}/{ma_name.replace(' ', '_')}"
-                logger.info(f"  📁 Kein Auto-Match — Fallback-Ordner: {ma_ordner}")
+                log_with_fields(logging.INFO, f"Kein Auto-Match — Fallback-Ordner", event="onedrive_fallback", mitarbeiter=ma_name, ordner=ma_ordner)
         monat = info.abrechnungsmonat or "unbekannt"
 
         try:
             pdf_einzeln = create_single_pdf(doc, pages)
             pdf_filename = generate_filename(ma_name, monat)
             erkannte += 1
-            logger.info(f"  📄 Einzel-PDF erzeugt: {pdf_filename} | seiten={pages}")
+            log_with_fields(logging.INFO, f"Einzel-PDF erzeugt: {pdf_filename}", event="pdf_created", mitarbeiter=ma_name, datei=pdf_filename, seiten=pages)
 
             ordner_pfad = ma_ordner.strip('/')
             upload_result = upload_to_onedrive(access_token, mailbox_email, ordner_pfad, pdf_filename, pdf_einzeln)
 
             if not upload_result:
                 fehler += 1
-                logger.error(f"  ❌ OneDrive-Upload fehlgeschlagen: {ma_name}")
+                log_with_fields(logging.ERROR, f"OneDrive-Upload fehlgeschlagen: {ma_name}", event="onedrive_upload_failed", mitarbeiter=ma_name)
                 try:
                     send_notification_email(access_token, mailbox_email,
                         f"OneDrive-Fehler: {ma_name}",
                         f"Die Gehaltsabrechnung für {ma_name} konnte nicht in OneDrive abgelegt werden.",
                         to_email=notif_email)
                 except Exception as mail_err:
-                    logger.error(f"  ❌ Fehler-Mail fehlgeschlagen: {mail_err}")
+                    log_with_fields(logging.ERROR, "Fehler-Mail fehlgeschlagen", event="notification_failed", fehler=str(mail_err))
                 continue
 
-            logger.info(f"  ✅ OneDrive OK: {ordner_pfad}/{pdf_filename}")
+            log_with_fields(logging.INFO, f"OneDrive OK: {pdf_filename}", event="onedrive_upload_ok", mitarbeiter=ma_name, ordner=ordner_pfad)
 
             if ma_email:
                 try:
@@ -1651,11 +1773,11 @@ async def process_sammel_pdf(
                     betreff = email_betreff.replace("{monat}", monat_display)
                     text = email_text.replace("{monat}", monat_display)
                     create_draft_email(access_token, mailbox_email, ma_email, betreff, text, pdf_einzeln, pdf_filename)
-                    logger.info(f"  ✉️ Entwurf erstellt: {ma_email}")
+                    log_with_fields(logging.INFO, f"Entwurf erstellt für {ma_name}", event="draft_created", mitarbeiter=ma_name, empfaenger=mask_email(ma_email))
                 except Exception as e:
-                    logger.error(f"  ❌ Entwurf-Fehler für {ma_name}: {e}", exc_info=True)
+                    log_with_fields(logging.ERROR, f"Entwurf-Fehler für {ma_name}", event="draft_failed", mitarbeiter=ma_name, fehler=str(e))
             else:
-                logger.warning(f"  ⚠️ Keine E-Mail für {ma_name} — kein Entwurf erstellt")
+                log_with_fields(logging.WARNING, f"Keine E-Mail für {ma_name}", event="no_email", mitarbeiter=ma_name)
 
             if lexoffice_api_key:
                 try:
@@ -1663,12 +1785,12 @@ async def process_sammel_pdf(
                                        brutto_betrag=info.brutto_betrag or 0,
                                        netto_betrag=info.netto_betrag or 0,
                                        monat=monat)
-                    logger.info(f"  📤 Lexoffice OK: {pdf_filename}")
+                    log_with_fields(logging.INFO, f"Lexoffice OK: {pdf_filename}", event="lexoffice_upload_ok", mitarbeiter=ma_name)
                 except Exception as e:
-                    logger.error(f"  ❌ Lexoffice-Fehler für {ma_name}: {e}", exc_info=True)
+                    log_with_fields(logging.ERROR, f"Lexoffice-Fehler für {ma_name}", event="lexoffice_upload_failed", mitarbeiter=ma_name, fehler=str(e))
 
         except Exception as e:
-            logger.error(f"  ❌ Unerwarteter Fehler bei {ma_name}: {e}", exc_info=True)
+            log_with_fields(logging.ERROR, f"Unerwarteter Fehler bei {ma_name}", event="mitarbeiter_error", mitarbeiter=ma_name, fehler=str(e))
             fehler += 1
 
     if unklar > 0:
@@ -1679,15 +1801,15 @@ async def process_sammel_pdf(
                 f"Die Dateien wurden unter /{onedrive_basispfad.strip('/')}/_Unklar abgelegt.",
                 to_email=notif_email)
         except Exception as e:
-            logger.error(f"❌ Unklar-Benachrichtigung fehlgeschlagen: {e}")
+            log_with_fields(logging.ERROR, "Unklar-Benachrichtigung fehlgeschlagen", event="notification_failed", fehler=str(e))
 
     doc.close()
 
     try:
         delete_onedrive_file(access_token, mailbox_email, f"_TEMP/{filename}")
-        logger.info(f"🗑️ Temp-Datei gelöscht: _TEMP/{filename}")
+        log_with_fields(logging.INFO, "Temp-Datei gelöscht", event="temp_deleted", datei=filename)
     except Exception as e:
-        logger.warning(f"⚠️ Temp-Datei konnte nicht gelöscht werden: {e}")
+        log_with_fields(logging.WARNING, "Temp-Datei konnte nicht gelöscht werden", event="temp_delete_failed", fehler=str(e))
 
     status = "success" if fehler == 0 and unklar == 0 else ("error" if erkannte == 0 else "partial")
     message = f"{erkannte} Mitarbeiter verarbeitet, {fehler} Fehler, {unklar} nicht zugeordnet"
@@ -1697,23 +1819,88 @@ async def process_sammel_pdf(
     sum_brutto = sum(s.brutto_betrag for s in seiten_details if s.brutto_betrag and s.typ == "lohnabrechnung")
     sum_netto = sum(s.netto_betrag for s in seiten_details if s.netto_betrag and s.typ == "lohnabrechnung")
 
+    pipeline_dauer = round(time.time() - pipeline_start, 1)
+
     try:
         write_verarbeitungs_log(tenant_id, filename, gesamt_seiten, erkannte, fehler, unklar, status, message, seiten_details, sum_brutto, sum_netto)
     except Exception as e:
-        logger.error(f"❌ Log-Schreiben fehlgeschlagen: {e}", exc_info=True)
+        log_with_fields(logging.ERROR, "Log-Schreiben fehlgeschlagen", event="log_write_failed", fehler=str(e))
 
-    logger.info(f"✅ PIPELINE FERTIG | status={status} | {message}")
+    log_with_fields(logging.INFO, f"Pipeline abgeschlossen: {status}", event="pipeline_done",
+        status=status, datei=filename, erkannte=erkannte, fehler=fehler, unklar=unklar,
+        seiten=gesamt_seiten, brutto=round(sum_brutto, 2), netto=round(sum_netto, 2),
+        dauer_sek=pipeline_dauer)
 
 
 # ==========================================
 # 📝 VERARBEITUNGS-LOG
 # ==========================================
 
+def _encrypt_seiten_details(seiten_details: list[SeitenDetail]) -> list[dict]:
+    """Verschlüsselt sensible Gehaltsdaten in den Seiten-Details für Firestore."""
+    encrypted = []
+    for sd in seiten_details:
+        d = sd.model_dump()
+        # Brutto/Netto verschlüsseln (sensible Gehaltsdaten gemäß AVV)
+        if d.get("brutto_betrag") is not None:
+            d["brutto_betrag_enc"] = encrypt_data(str(d["brutto_betrag"]))
+            d["brutto_betrag"] = None
+        if d.get("netto_betrag") is not None:
+            d["netto_betrag_enc"] = encrypt_data(str(d["netto_betrag"]))
+            d["netto_betrag"] = None
+        # Zahlungspositionen: Beträge verschlüsseln
+        if d.get("zahlungspositionen"):
+            for pos in d["zahlungspositionen"]:
+                if pos.get("betrag") is not None:
+                    pos["betrag_enc"] = encrypt_data(str(pos["betrag"]))
+                    pos["betrag"] = None
+        if d.get("gesamtsumme") is not None:
+            d["gesamtsumme_enc"] = encrypt_data(str(d["gesamtsumme"]))
+            d["gesamtsumme"] = None
+        encrypted.append(d)
+    return encrypted
+
+
+def _decrypt_seiten_details(seiten_details: list[dict]) -> list[dict]:
+    """Entschlüsselt sensible Gehaltsdaten aus Firestore für die API-Antwort."""
+    decrypted = []
+    for d in seiten_details:
+        d = dict(d)  # Kopie
+        if d.get("brutto_betrag_enc"):
+            try:
+                d["brutto_betrag"] = float(decrypt_data(d["brutto_betrag_enc"]))
+            except Exception:
+                d["brutto_betrag"] = None
+            del d["brutto_betrag_enc"]
+        if d.get("netto_betrag_enc"):
+            try:
+                d["netto_betrag"] = float(decrypt_data(d["netto_betrag_enc"]))
+            except Exception:
+                d["netto_betrag"] = None
+            del d["netto_betrag_enc"]
+        if d.get("zahlungspositionen"):
+            for pos in d["zahlungspositionen"]:
+                if pos.get("betrag_enc"):
+                    try:
+                        pos["betrag"] = float(decrypt_data(pos["betrag_enc"]))
+                    except Exception:
+                        pos["betrag"] = None
+                    del pos["betrag_enc"]
+        if d.get("gesamtsumme_enc"):
+            try:
+                d["gesamtsumme"] = float(decrypt_data(d["gesamtsumme_enc"]))
+            except Exception:
+                d["gesamtsumme"] = None
+            del d["gesamtsumme_enc"]
+        decrypted.append(d)
+    return decrypted
+
+
 def write_verarbeitungs_log(tenant_id: str, dateiname: str, gesamt_seiten: int,
                             erkannte: int, fehler: int, unklar: int,
                             status: str, message: str, seiten_details: list[SeitenDetail],
                             gesamt_brutto: float = 0, gesamt_netto: float = 0):
-    """Schreibt einen Verarbeitungs-Log-Eintrag in Firestore."""
+    """Schreibt einen Verarbeitungs-Log-Eintrag in Firestore. Gehaltsdaten werden verschlüsselt."""
     log_data = {
         "timestamp": firestore.SERVER_TIMESTAMP,
         "status": status,
@@ -1723,10 +1910,13 @@ def write_verarbeitungs_log(tenant_id: str, dateiname: str, gesamt_seiten: int,
         "fehler_anzahl": fehler,
         "nicht_zugeordnet": unklar,
         "message": message,
-        "seiten_details": [sd.model_dump() for sd in seiten_details],
-        "gesamt_brutto": round(gesamt_brutto, 2) if gesamt_brutto else None,
-        "gesamt_netto": round(gesamt_netto, 2) if gesamt_netto else None,
+        "seiten_details": _encrypt_seiten_details(seiten_details),
+        # Gesamt-Beträge verschlüsselt speichern
+        "gesamt_brutto_enc": encrypt_data(str(round(gesamt_brutto, 2))) if gesamt_brutto else None,
+        "gesamt_netto_enc": encrypt_data(str(round(gesamt_netto, 2))) if gesamt_netto else None,
+        "gesamt_brutto": None,
+        "gesamt_netto": None,
     }
     db.collection("lohn_kunden").document(tenant_id).collection("verarbeitungs_logs").add(log_data)
-    logger.info(f"  📝 Log geschrieben: {status} — {message}")
+    log_with_fields(logging.INFO, f"Log geschrieben: {status}", event="log_written", status=status)
 
