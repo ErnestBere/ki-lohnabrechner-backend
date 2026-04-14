@@ -779,6 +779,11 @@ def get_logs(user_token: dict = Depends(verify_firebase_token)):
         # Timestamp serialisieren
         if log_data.get("timestamp"):
             log_data["timestamp"] = log_data["timestamp"].isoformat() if hasattr(log_data["timestamp"], "isoformat") else str(log_data["timestamp"])
+        # zahlungsstatus: Timestamps serialisieren
+        if log_data.get("zahlungsstatus"):
+            for key, val in log_data["zahlungsstatus"].items():
+                if isinstance(val, dict) and val.get("zeitpunkt") and hasattr(val["zeitpunkt"], "isoformat"):
+                    val["zeitpunkt"] = val["zeitpunkt"].isoformat()
         logs.append(log_data)
     return {"logs": logs}
 
@@ -1532,26 +1537,25 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
 
     for attempt in range(3):
         res = requests.post("https://api.lexware.io/v1/vouchers", headers=headers, json=voucher_payload)
-        if res.status_code == 201:
+        if res.status_code in [200, 201]:
             voucher_id = res.json().get("id")
-            logger.info(f"  📤 Lexoffice Voucher erstellt: {filename} | id={voucher_id}")
+            log_with_fields(logging.INFO, f"Lexoffice Voucher erstellt: {filename}", event="lexoffice_voucher_created", datei=filename, voucher_id=voucher_id)
 
             # PDF an den Voucher anhängen
             upload_headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
             files = {"file": (filename, pdf_bytes, "application/pdf")}
             file_res = requests.post(f"https://api.lexware.io/v1/vouchers/{voucher_id}/files", headers=upload_headers, files=files)
             if file_res.status_code in [200, 201, 202]:
-                logger.info(f"  📎 PDF angehängt an Voucher {voucher_id}")
+                log_with_fields(logging.INFO, f"Lexoffice PDF angehängt: {filename}", event="lexoffice_pdf_attached", voucher_id=voucher_id)
             else:
-                logger.warning(f"  ⚠️ PDF-Anhang fehlgeschlagen: {file_res.status_code} {file_res.text[:200]}")
+                log_with_fields(logging.WARNING, f"Lexoffice PDF-Anhang fehlgeschlagen", event="lexoffice_pdf_attach_failed", status_code=file_res.status_code, voucher_id=voucher_id)
 
             return res.json()
         elif res.status_code == 429:
-            logger.warning(f"  ⏳ Lexoffice Rate Limit — Warte 3s (Versuch {attempt + 1}/3)")
-            import time
+            log_with_fields(logging.WARNING, f"Lexoffice Rate Limit — Warte 3s (Versuch {attempt + 1}/3)", event="lexoffice_rate_limit", attempt=attempt + 1)
             time.sleep(3)
         else:
-            logger.error(f"  ❌ Lexoffice Voucher Fehler: {res.status_code} {res.text[:300]}")
+            log_with_fields(logging.ERROR, f"Lexoffice Voucher Fehler", event="lexoffice_voucher_failed", status_code=res.status_code, datei=filename)
             return None
     return None
 

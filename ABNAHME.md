@@ -8,40 +8,41 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 
 ## 1. AUTHENTIFIZIERUNG
 
-- [ ] 1.1 Beta-Passwort-Schutz: Ohne korrektes Passwort ist die App nicht zugänglich
-- [ ] 1.2 Microsoft-Login: Klick auf "Login" leitet zu Microsoft-Anmeldung weiter
-- [ ] 1.3 Nach erfolgreichem Login landet man auf dem Dashboard
-- [ ] 1.4 Abmelden funktioniert und leitet zurück zum Login-Screen
-- [ ] 1.5 Nach erneutem Öffnen der App (Browser-Tab) bleibt man eingeloggt (kein erneutes Login nötig)
-- [ ] 1.6 Falsche Microsoft-Zugangsdaten zeigen eine verständliche Fehlermeldung
-
+- [X ] 1.1 Beta-Passwort-Schutz: Ohne korrektes Passwort ist die App nicht zugänglich
+- [X ] 1.2 Microsoft-Login: Klick auf "Login" leitet zu Microsoft-Anmeldung weiter
+- [ X] 1.3 Nach erfolgreichem Login landet man auf dem Dashboard
+- [ X] 1.4 Abmelden funktioniert und leitet zurück zum Login-Screen
+- [ ] 1.5 Nach erneutem Öffnen der App (Browser-Tab) bleibt man eingeloggt (kein erneutes Login nötig)  NICHT erfüllt
+- [ X] 1.6 Falsche Microsoft-Zugangsdaten zeigen eine verständliche Fehlermeldung
+- [X ] 1.7 Webhook entfernbar
+- [ ]  1.8  berechtigungne maximal eingeschrönkt, partnetsatuts microstfot , Vertrag der die nutzung der rechte seintes plinius einschrönkt
 ---
 
 ## 2. KONFIGURATION
 
-- [ ] 2.1 Konfigurationsseite lädt bestehende Einstellungen vor (Pre-fill)
-- [ ] 2.2 Mail-Ordner-Dropdown zeigt alle Outlook-Ordner des angemeldeten Kontos
-- [ ] 2.3 Steuerbüro-Absender kann gesetzt werden (Pflichtfeld)
-- [ ] 2.4 OneDrive-Basispfad kann gesetzt werden
-- [ ] 2.5 Fehler-Benachrichtigungs-E-Mail kann gesetzt werden
-- [ ] 2.6 Betreff- und Inhalt-Filter können als Tags eingegeben werden (Enter-Taste)
-- [ ] 2.7 Lexoffice API-Key kann gesetzt werden (wird als *** angezeigt)
-- [ ] 2.8 E-Mail-Vorlagen können angepasst werden
-- [ ] 2.9 Zahlungs-Tracking kann aktiviert/deaktiviert werden
-- [ ] 2.10 Speichern löst Microsoft-Autorisierung aus (beim ersten Mal)
-- [ ] 2.11 Nach Speichern erscheint Erfolgsmeldung
-- [ ] 2.12 Webhook-Status: Nach Speichern ist der Webhook aktiv (Microsoft sendet Validierungsanfrage)
+- [ X] 2.1 Konfigurationsseite lädt bestehende Einstellungen vor (Pre-fill)
+- [X ] 2.2 Mail-Ordner-Dropdown zeigt alle Outlook-Ordner des angemeldeten Kontos
+- [X ] 2.3 Steuerbüro-Absender kann gesetzt werden (Pflichtfeld)
+- [ X] 2.4 OneDrive-Basispfad kann gesetzt werden
+- [X ] 2.5 Fehler-Benachrichtigungs-E-Mail kann gesetzt werden
+- [ ] 2.6 Betreff- und Inhalt-Filter können als Tags eingegeben werden (Enter-Taste) to be testes if filter wirklihc funtkionert
+- [ X] 2.7 Lexoffice API-Key kann gesetzt werden (wird als *** angezeigt)
+- [X ] 2.8 E-Mail-Vorlagen können angepasst werden
+- [ ] 2.9 Zahlungs-Tracking kann aktiviert/deaktiviert werden to be testsed
+- [ ] 2.10 Speichern löst Microsoft-Autorisierung aus (beim ersten Mal) to be tested
+- [ X] 2.11 Nach Speichern erscheint Erfolgsmeldung
+- [ ] 2.12 Webhook-Status: Nach Speichern ist der Webhook aktiv (Microsoft sendet Validierungsanfrage) to be tested
 
 ---
 
 ## 3. MITARBEITER-VERWALTUNG
 
-- [ ] 3.1 Mitarbeiter können angelegt werden (Name, PNr, E-Mail)
-- [ ] 3.2 Personalnummer ist eindeutig — doppelte PNr wird abgelehnt
-- [ ] 3.3 OneDrive-Ordner ist optional — leer lassen aktiviert Auto-Match
-- [ ] 3.4 Mitarbeiter können bearbeitet werden
-- [ ] 3.5 Mitarbeiter können gelöscht werden (mit Bestätigungsdialog)
-- [ ] 3.6 Mitarbeiterliste wird korrekt angezeigt
+- [ X] 3.1 Mitarbeiter können angelegt werden (Name, PNr, E-Mail)
+- [ X] 3.2 Personalnummer ist eindeutig — doppelte PNr wird abgelehnt
+- [X ] 3.3 OneDrive-Ordner ist optional — leer lassen aktiviert Auto-Match
+- [X ] 3.4 Mitarbeiter können bearbeitet werden
+- [ X] 3.5 Mitarbeiter können gelöscht werden (mit Bestätigungsdialog)
+- [ X] 3.6 Mitarbeiterliste wird korrekt angezeigt
 
 ---
 
@@ -49,7 +50,7 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 
 ### 4.1 E-Mail-Empfang und Filterung
 - [ ] 4.1.1 E-Mail vom konfigurierten Steuerbüro-Absender mit PDF-Anhang wird verarbeitet
-- [ ] 4.1.2 E-Mail von einem anderen Absender wird ignoriert (kein Log-Eintrag)
+- [X ] 4.1.2 E-Mail von einem anderen Absender wird ignoriert (kein Log-Eintrag)
 - [ ] 4.1.3 E-Mail ohne PDF-Anhang: Benachrichtigungs-Mail wird gesendet, kein Absturz
 - [ ] 4.1.4 PDF die keine Lohnabrechnung ist (z.B. Rechnung): Benachrichtigungs-Mail, kein Absturz
 - [ ] 4.1.5 Gleiche E-Mail wird nicht doppelt verarbeitet (Duplikat-Schutz)
@@ -65,24 +66,24 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 - [ ] 4.2.7 Netto-Betrag wird korrekt extrahiert
 
 ### 4.3 Mitarbeiter-Zuordnung
-- [ ] 4.3.1 Zuordnung per Personalnummer funktioniert (exakter Match)
-- [ ] 4.3.2 Zuordnung per Name funktioniert (Fallback wenn keine PNr)
-- [ ] 4.3.3 Nicht zuordenbare Seite landet in `{Basispfad}/_Unklar/` mit MA-Name im Dateinamen
-- [ ] 4.3.4 Benachrichtigungs-Mail bei unklaren Seiten wird gesendet
+- [ X] 4.3.1 Zuordnung per Personalnummer funktioniert (exakter Match)
+- [ X] 4.3.2 Zuordnung per Name funktioniert (Fallback wenn keine PNr)
+- [ X] 4.3.3 Nicht zuordenbare Seite landet in `{Basispfad}/_Unklar/` mit MA-Name im Dateinamen
+- [ X] 4.3.4 Benachrichtigungs-Mail bei unklaren Seiten wird gesendet  (hier muss noch geändert werden, dass die nachticht nicht von der mail selbst geschigkt wird sondernvom loggin ssytem, damit wr den email write webhook entfenren können)
 
 ### 4.4 OneDrive-Ablage
-- [ ] 4.4.1 Einzel-PDF wird im manuell konfigurierten Ordner abgelegt
-- [ ] 4.4.2 Auto-Match: Wenn kein Ordner konfiguriert, wird passender Unterordner im Basispfad gefunden
-- [ ] 4.4.3 Dateiname hat Format: `JJMMTT_Gehaltsabrechnung_Vorname_Nachname.pdf`
-- [ ] 4.4.4 Ordner wird automatisch angelegt wenn er nicht existiert
-- [ ] 4.4.5 Temporäre Datei in `_TEMP/` wird nach Verarbeitung gelöscht
+- [ X] 4.4.1 Einzel-PDF wird im manuell konfigurierten Ordner abgelegt
+- [X ] 4.4.2 Auto-Match: Wenn kein Ordner konfiguriert, wird passender Unterordner im Basispfad gefunden
+- [ X] 4.4.3 Dateiname hat Format: `JJMMTT_Gehaltsabrechnung_Vorname_Nachname.pdf`
+- [ X] 4.4.4 Ordner wird automatisch angelegt wenn er nicht existiert
+- [ X] 4.4.5 Temporäre Datei in `_TEMP/` wird nach Verarbeitung gelöscht
 
 ### 4.5 E-Mail-Entwürfe
-- [ ] 4.5.1 Outlook-Entwurf wird für jeden zugeordneten Mitarbeiter erstellt
-- [ ] 4.5.2 Entwurf enthält die individuelle PDF als Anhang
-- [ ] 4.5.3 Betreff und Text entsprechen den konfigurierten Vorlagen
-- [ ] 4.5.4 `{monat}` Platzhalter wird durch den Abrechnungsmonat ersetzt
-- [ ] 4.5.5 Entwurf wird NICHT automatisch gesendet
+- [ X] 4.5.1 Outlook-Entwurf wird für jeden zugeordneten Mitarbeiter erstellt
+- [ X] 4.5.2 Entwurf enthält die individuelle PDF als Anhang
+- [ X] 4.5.3 Betreff und Text entsprechen den konfigurierten Vorlagen
+- [X ] 4.5.4 `{monat}` Platzhalter wird durch den Abrechnungsmonat ersetzt
+- [ X] 4.5.5 Entwurf wird NICHT automatisch gesendet
 
 ### 4.6 Lexoffice-Upload
 - [ ] 4.6.1 PDF wird als Beleg in Lexoffice hochgeladen (wenn API-Key konfiguriert)
@@ -175,3 +176,20 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 | 9 (Datenschutz) | | | |
 
 **Freigabe zur Produktivnahme:** _____________________ Datum: _____________
+
+
+
+Verwalten Sie den Zugriff auf Daten, für die Sie Lohnabrechner-Webhook Zugriff erteilt haben.
+Ermöglicht Lohnabrechner-Webhook das Anzeigen und Aktualisieren der Daten, auf die Sie Zugriff erteilt haben, selbst wenn Sie die App zurzeit nicht verwenden. Lohnabrechner-Webhook werden hierdurch keine zusätzlichen Berechtigungen gewährt.
+
+Lesen Ihres Profils
+Lohnabrechner-Webhook kann Ihr Profil lesen.
+
+Lesen Ihrer E-Mails
+Lohnabrechner-Webhook kann E-Mails in Ihrem Postfach lesen.
+
+Lese- und Schreibzugriff auf Ihre E-Mails
+Lohnabrechner-Webhook kann E-Mails in Ihrem Postfach lesen, aktualisieren, erstellen und löschen. Eine Berechtigung zum Senden von E-Mails ist nicht enthalten.
+
+Vollzugriff auf alle Dateien, auf die Sie Zugriff haben
+Lohnabrechner-Webhook kann alle OneDrive-Dateien lesen, erstellen, aktualisieren und löschen, auf die Sie zugreifen können.
