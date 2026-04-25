@@ -1493,7 +1493,7 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
     if cat_res.status_code == 200:
         for cat in cat_res.json():
             name = cat.get("name", "").lower()
-            if any(kw in name for kw in ["lohn", "gehalt", "personal"]):
+            if any(kw in name for kw in ["lohn", "löhn", "gehalt", "gehält", "personal"]):
                 lohn_category_id = cat.get("id")
                 logger.info(f"  📂 Lexoffice Kategorie gefunden: {cat.get('name')} ({lohn_category_id})")
                 break
