@@ -119,6 +119,7 @@ def log_with_fields(level: int, msg: str, **fields):
 
 import requests
 import msal
+from typing import Union
 import secrets
 import json
 import datetime
