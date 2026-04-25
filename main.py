@@ -81,6 +81,26 @@ def mask_tenant(tenant_id: str | None) -> str:
     return "***"
 
 
+
+def mask_name(name):
+    """Maskiert Mitarbeiternamen auf Initialen. 'Hannah Meyer' -> 'H. M.' """
+    if not name:
+        return "–"
+    parts = name.strip().split()
+    return " ".join(p[0] + "." for p in parts if p)
+
+
+def mask_filename(filename):
+    """Entfernt personenbezogene Daten aus Dateinamen.
+    '260331_Gehaltsabrechnung_Hannah_Meyer.pdf' -> '260331_Gehaltsabrechnung_***.pdf'"""
+    import re as _re
+    if not filename:
+        return "–"
+    masked = _re.sub(r"(Gehaltsabrechnung|Lohnabrechnung|Abrechnung)_[^.]+", r"\1_***", filename, flags=_re.IGNORECASE)
+    masked = _re.sub(r"(Unklar)_[^_]+_[^_]+_(Seite_[0-9]+)", r"\1_***_\2", masked, flags=_re.IGNORECASE)
+    return masked
+
+
 def new_processing_id() -> str:
     """Erzeugt eine neue Korrelations-ID und setzt sie im aktuellen Context."""
     pid = uuid.uuid4().hex[:12]
@@ -979,7 +999,7 @@ async def m365_webhook(request: Request):
             ist_lohnabrechnung = check_ist_lohnabrechnung(pdf_bytes, filename)
 
             if not ist_lohnabrechnung:
-                log_with_fields(logging.WARNING, f"Gemini: '{filename}' ist keine Lohnabrechnung", event="gemini_precheck_rejected", datei=filename)
+                log_with_fields(logging.WARNING, f"Gemini: '{filename}' ist keine Lohnabrechnung", event="gemini_precheck_rejected", datei=mask_filename(filename))
                 if betreff_filter_match:
                     send_notification_email(
                         token_result["access_token"], MAILBOX_EMAIL,
@@ -1395,10 +1415,10 @@ def upload_to_onedrive(access_token: str, user_email: str, folder_path: str, fil
     res = requests.put(upload_url, headers={**headers, "Content-Type": "application/pdf"}, data=content)
 
     if res.status_code in [200, 201]:
-        log_with_fields(logging.INFO, f"OneDrive Upload OK: {folder_path}/{filename}", event="onedrive_file_uploaded", ordner=folder_path, datei=filename)
+        log_with_fields(logging.INFO, f"OneDrive Upload OK: {folder_path}/{filename}", event="onedrive_file_uploaded", ordner=folder_path, datei=mask_filename(filename))
         return res.json()
     else:
-        log_with_fields(logging.ERROR, f"OneDrive Upload fehlgeschlagen", event="onedrive_file_upload_failed", status_code=res.status_code, ordner=folder_path, datei=filename)
+        log_with_fields(logging.ERROR, f"OneDrive Upload fehlgeschlagen", event="onedrive_file_upload_failed", status_code=res.status_code, ordner=folder_path, datei=mask_filename(filename))
         return None
 
 
@@ -1559,7 +1579,7 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
         res = requests.post("https://api.lexware.io/v1/vouchers", headers=headers, json=voucher_payload)
         if res.status_code in [200, 201]:
             voucher_id = res.json().get("id")
-            log_with_fields(logging.INFO, f"Lexoffice Voucher erstellt: {filename}", event="lexoffice_voucher_created", datei=filename, voucher_id=voucher_id)
+            log_with_fields(logging.INFO, f"Lexoffice Voucher erstellt: {filename}", event="lexoffice_voucher_created", datei=mask_filename(filename), voucher_id=voucher_id)
 
             # PDF an den Voucher anhängen
             upload_headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
@@ -1575,7 +1595,7 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
             log_with_fields(logging.WARNING, f"Lexoffice Rate Limit — Warte 3s (Versuch {attempt + 1}/3)", event="lexoffice_rate_limit", attempt=attempt + 1)
             time.sleep(3)
         else:
-            log_with_fields(logging.ERROR, f"Lexoffice Voucher Fehler", event="lexoffice_voucher_failed", status_code=res.status_code, datei=filename)
+            log_with_fields(logging.ERROR, f"Lexoffice Voucher Fehler", event="lexoffice_voucher_failed", status_code=res.status_code, datei=mask_filename(filename))
             return None
     return None
 
@@ -1633,7 +1653,7 @@ async def process_sammel_pdf(
     """Hauptpipeline: Sammel-PDF zerlegen, zuordnen, ablegen, Entwürfe erstellen."""
     pipeline_start = time.time()
     notif_email = benachrichtigungs_email or mailbox_email
-    log_with_fields(logging.INFO, f"Pipeline gestartet: {filename}", event="pipeline_start", datei=filename, tenant=mask_tenant(tenant_id))
+    log_with_fields(logging.INFO, f"Pipeline gestartet: {filename}", event="pipeline_start", datei=mask_filename(filename), tenant=mask_tenant(tenant_id))
 
     seiten_details = []
     erkannte = 0
@@ -1643,7 +1663,7 @@ async def process_sammel_pdf(
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception as e:
-        log_with_fields(logging.ERROR, f"PDF nicht lesbar: {filename}", event="pdf_unreadable", datei=filename, fehler=str(e))
+        log_with_fields(logging.ERROR, f"PDF nicht lesbar: {filename}", event="pdf_unreadable", datei=mask_filename(filename), fehler=str(e))
         try:
             send_notification_email(access_token, mailbox_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}", to_email=notif_email)
         except Exception as mail_err:
@@ -1652,12 +1672,12 @@ async def process_sammel_pdf(
         return
 
     gesamt_seiten = doc.page_count
-    log_with_fields(logging.INFO, f"PDF geöffnet: {gesamt_seiten} Seiten", event="pdf_opened", datei=filename, seiten=gesamt_seiten)
+    log_with_fields(logging.INFO, f"PDF geöffnet: {gesamt_seiten} Seiten", event="pdf_opened", datei=mask_filename(filename), seiten=gesamt_seiten)
 
     # Temporär in OneDrive speichern
     try:
         upload_to_onedrive(access_token, mailbox_email, "_TEMP", filename, pdf_bytes)
-        log_with_fields(logging.INFO, "Temp-Upload OK", event="temp_upload_ok", datei=filename)
+        log_with_fields(logging.INFO, "Temp-Upload OK", event="temp_upload_ok", datei=mask_filename(filename))
     except Exception as e:
         log_with_fields(logging.WARNING, "Temp-Upload fehlgeschlagen (nicht kritisch)", event="temp_upload_failed", fehler=str(e))
 
@@ -1723,15 +1743,15 @@ async def process_sammel_pdf(
                 brutto_betrag=info.brutto_betrag, netto_betrag=info.netto_betrag,
                 betrag_warnung=info.betrag_warnung
             ))
-            log_with_fields(logging.INFO, f"Zugeordnet: {info.mitarbeiter_name} → {ma.get('name')}", event="mitarbeiter_zugeordnet", seite=info.seite, mitarbeiter=ma.get("name"), pnr=ma.get("personal_nr"))
+            log_with_fields(logging.INFO, f"Zugeordnet: {mask_name(info.mitarbeiter_name)} → {mask_name(ma.get('name'))}", event="mitarbeiter_zugeordnet", seite=info.seite, mitarbeiter=mask_name(ma.get("name")), pnr="***")
         else:
             unklar += 1
-            log_with_fields(logging.WARNING, f"Nicht zuordenbar: {info.mitarbeiter_name or '–'}", event="mitarbeiter_unklar", seite=info.seite, name=info.mitarbeiter_name, pnr=info.personal_nr)
+            log_with_fields(logging.ERROR, f"Nicht zuordenbar: {mask_name(info.mitarbeiter_name)}", event="mitarbeiter_unklar", seite=info.seite, name=mask_name(info.mitarbeiter_name), pnr="***")
             try:
                 pdf_einzeln = create_single_pdf(doc, [info.seite])
                 unklar_name = f"Unklar_{info.mitarbeiter_name.replace(' ', '_') + '_' if info.mitarbeiter_name else ''}Seite_{info.seite}_{filename}"
                 upload_to_onedrive(access_token, mailbox_email, f"{onedrive_basispfad.strip('/')}/_Unklar", unklar_name, pdf_einzeln)
-                log_with_fields(logging.INFO, f"Unklar abgelegt: {unklar_name}", event="unklar_uploaded", datei=unklar_name)
+                log_with_fields(logging.INFO, f"Unklar abgelegt: {unklar_name}", event="unklar_uploaded", datei=mask_filename(unklar_name))
             except Exception as e:
                 log_with_fields(logging.ERROR, "Unklar-Upload fehlgeschlagen", event="unklar_upload_failed", fehler=str(e))
             seiten_details.append(SeitenDetail(
@@ -1765,21 +1785,21 @@ async def process_sammel_pdf(
             else:
                 # Fallback: Basispfad/Name_mit_Unterstrichen
                 ma_ordner = f"{onedrive_basispfad.strip('/')}/{ma_name.replace(' ', '_')}"
-                log_with_fields(logging.INFO, f"Kein Auto-Match — Fallback-Ordner", event="onedrive_fallback", mitarbeiter=ma_name, ordner=ma_ordner)
+                log_with_fields(logging.INFO, f"Kein Auto-Match — Fallback-Ordner", event="onedrive_fallback", mitarbeiter=mask_name(ma_name), ordner=ma_ordner)
         monat = info.abrechnungsmonat or "unbekannt"
 
         try:
             pdf_einzeln = create_single_pdf(doc, pages)
             pdf_filename = generate_filename(ma_name, monat)
             erkannte += 1
-            log_with_fields(logging.INFO, f"Einzel-PDF erzeugt: {pdf_filename}", event="pdf_created", mitarbeiter=ma_name, datei=pdf_filename, seiten=pages)
+            log_with_fields(logging.INFO, f"Einzel-PDF erzeugt: {mask_filename(pdf_filename)}", event="pdf_created", mitarbeiter=mask_name(ma_name), datei=mask_filename(pdf_filename), seiten=pages)
 
             ordner_pfad = ma_ordner.strip('/')
             upload_result = upload_to_onedrive(access_token, mailbox_email, ordner_pfad, pdf_filename, pdf_einzeln)
 
             if not upload_result:
                 fehler += 1
-                log_with_fields(logging.ERROR, f"OneDrive-Upload fehlgeschlagen: {ma_name}", event="onedrive_upload_failed", mitarbeiter=ma_name)
+                log_with_fields(logging.ERROR, f"OneDrive-Upload fehlgeschlagen: {mask_name(ma_name)}", event="onedrive_upload_failed", mitarbeiter=mask_name(ma_name))
                 try:
                     send_notification_email(access_token, mailbox_email,
                         f"OneDrive-Fehler: {ma_name}",
@@ -1789,7 +1809,7 @@ async def process_sammel_pdf(
                     log_with_fields(logging.ERROR, "Fehler-Mail fehlgeschlagen", event="notification_failed", fehler=str(mail_err))
                 continue
 
-            log_with_fields(logging.INFO, f"OneDrive OK: {pdf_filename}", event="onedrive_upload_ok", mitarbeiter=ma_name, ordner=ordner_pfad)
+            log_with_fields(logging.INFO, f"OneDrive OK: {mask_filename(pdf_filename)}", event="onedrive_upload_ok", mitarbeiter=mask_name(ma_name), ordner=ordner_pfad)
 
             if ma_email:
                 try:
@@ -1797,11 +1817,11 @@ async def process_sammel_pdf(
                     betreff = email_betreff.replace("{monat}", monat_display)
                     text = email_text.replace("{monat}", monat_display)
                     create_draft_email(access_token, mailbox_email, ma_email, betreff, text, pdf_einzeln, pdf_filename)
-                    log_with_fields(logging.INFO, f"Entwurf erstellt für {ma_name}", event="draft_created", mitarbeiter=ma_name, empfaenger=mask_email(ma_email))
+                    log_with_fields(logging.INFO, f"Entwurf erstellt für {mask_name(ma_name)}", event="draft_created", mitarbeiter=mask_name(ma_name), empfaenger=mask_email(ma_email))
                 except Exception as e:
-                    log_with_fields(logging.ERROR, f"Entwurf-Fehler für {ma_name}", event="draft_failed", mitarbeiter=ma_name, fehler=str(e))
+                    log_with_fields(logging.ERROR, f"Entwurf-Fehler für {mask_name(ma_name)}", event="draft_failed", mitarbeiter=mask_name(ma_name), fehler=str(e))
             else:
-                log_with_fields(logging.WARNING, f"Keine E-Mail für {ma_name}", event="no_email", mitarbeiter=ma_name)
+                log_with_fields(logging.WARNING, f"Keine E-Mail für {mask_name(ma_name)}", event="no_email", mitarbeiter=mask_name(ma_name))
 
             if lexoffice_api_key:
                 try:
@@ -1809,12 +1829,12 @@ async def process_sammel_pdf(
                                        brutto_betrag=info.brutto_betrag or 0,
                                        netto_betrag=info.netto_betrag or 0,
                                        monat=monat)
-                    log_with_fields(logging.INFO, f"Lexoffice OK: {pdf_filename}", event="lexoffice_upload_ok", mitarbeiter=ma_name)
+                    log_with_fields(logging.INFO, f"Lexoffice OK: {mask_filename(pdf_filename)}", event="lexoffice_upload_ok", mitarbeiter=mask_name(ma_name))
                 except Exception as e:
-                    log_with_fields(logging.ERROR, f"Lexoffice-Fehler für {ma_name}", event="lexoffice_upload_failed", mitarbeiter=ma_name, fehler=str(e))
+                    log_with_fields(logging.ERROR, f"Lexoffice-Fehler für {mask_name(ma_name)}", event="lexoffice_upload_failed", mitarbeiter=mask_name(ma_name), fehler=str(e))
 
         except Exception as e:
-            log_with_fields(logging.ERROR, f"Unerwarteter Fehler bei {ma_name}", event="mitarbeiter_error", mitarbeiter=ma_name, fehler=str(e))
+            log_with_fields(logging.ERROR, f"Unerwarteter Fehler: {mask_name(ma_name)}", event="mitarbeiter_error", mitarbeiter=mask_name(ma_name), fehler=str(e))
             fehler += 1
 
     if unklar > 0:
@@ -1831,7 +1851,7 @@ async def process_sammel_pdf(
 
     try:
         delete_onedrive_file(access_token, mailbox_email, f"_TEMP/{filename}")
-        log_with_fields(logging.INFO, "Temp-Datei gelöscht", event="temp_deleted", datei=filename)
+        log_with_fields(logging.INFO, "Temp-Datei gelöscht", event="temp_deleted", datei=mask_filename(filename))
     except Exception as e:
         log_with_fields(logging.WARNING, "Temp-Datei konnte nicht gelöscht werden", event="temp_delete_failed", fehler=str(e))
 
@@ -1851,7 +1871,7 @@ async def process_sammel_pdf(
         log_with_fields(logging.ERROR, "Log-Schreiben fehlgeschlagen", event="log_write_failed", fehler=str(e))
 
     log_with_fields(logging.INFO, f"Pipeline abgeschlossen: {status}", event="pipeline_done",
-        status=status, datei=filename, erkannte=erkannte, fehler=fehler, unklar=unklar,
+        status=status, datei=mask_filename(filename), erkannte=erkannte, fehler=fehler, unklar=unklar,
         seiten=gesamt_seiten, brutto=round(sum_brutto, 2), netto=round(sum_netto, 2),
         dauer_sek=pipeline_dauer)
 
