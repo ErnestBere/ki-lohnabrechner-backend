@@ -1491,12 +1491,22 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
     cat_res = requests.get("https://api.lexware.io/v1/posting-categories", headers=cat_headers)
     lohn_category_id = None
     if cat_res.status_code == 200:
+        keywords_by_priority = ["löhn", "lohn", "gehält", "gehalt", "personal"]
+        best_match = None
+        best_priority = 999
+        
         for cat in cat_res.json():
             name = cat.get("name", "").lower()
-            if any(kw in name for kw in ["lohn", "löhn", "gehalt", "gehält", "personal"]):
-                lohn_category_id = cat.get("id")
-                logger.info(f"  📂 Lexoffice Kategorie gefunden: {cat.get('name')} ({lohn_category_id})")
-                break
+            for i, kw in enumerate(keywords_by_priority):
+                if kw in name:
+                    if i < best_priority:
+                        best_priority = i
+                        best_match = cat
+                    break
+                    
+        if best_match:
+            lohn_category_id = best_match.get("id")
+            logger.info(f"  📂 Lexoffice Kategorie gefunden: {best_match.get('name')} ({lohn_category_id})")
 
     if not lohn_category_id:
         # Fallback: erste outgo-Kategorie nehmen
