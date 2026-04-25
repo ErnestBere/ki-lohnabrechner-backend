@@ -730,7 +730,7 @@ def delete_webhook(tenant_id: str, mailbox_email: str, user_token: dict = Depend
 
 class ZahlungsStatusUpdate(BaseModel):
     log_id: str
-    position_index: int  # Index in zahlungspositionen oder seiten_details
+    position_index: Union[int, str]  # Index in zahlungspositionen oder seiten_details
     bezahlt: bool
 
 @app.post("/api/zahlungsstatus")
