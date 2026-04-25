@@ -86,40 +86,40 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 - [ X] 4.5.5 Entwurf wird NICHT automatisch gesendet
 
 ### 4.6 Lexoffice-Upload
-- [ ] 4.6.1 PDF wird als Beleg in Lexoffice hochgeladen (wenn API-Key konfiguriert)
-- [ ] 4.6.2 Beleg erscheint in Lexoffice unter "Zu prüfen"
-- [ ] 4.6.3 Betrag ist korrekt gesetzt (Brutto-Betrag aus der Abrechnung)
-- [ ] 4.6.4 Kein Upload wenn kein API-Key konfiguriert (kein Fehler)
+- [ x] 4.6.1 PDF wird als Beleg in Lexoffice hochgeladen (wenn API-Key konfiguriert)
+- [ x] 4.6.2 Beleg erscheint in Lexoffice unter "Zu prüfen"
+- [ x] 4.6.3 Betrag ist korrekt gesetzt (Brutto-Betrag aus der Abrechnung)
+- [ x] 4.6.4 Kein Upload wenn kein API-Key konfiguriert (kein Fehler)
 
 ---
 
 ## 5. DASHBOARD
 
 ### 5.1 Anzeige
-- [ ] 5.1.1 Logs werden nach Monaten gruppiert angezeigt
-- [ ] 5.1.2 Aktueller Monat ist aufgeklappt, ältere Monate eingeklappt
-- [ ] 5.1.3 Monats-Header zeigt: Anzahl Verarbeitungen, Gesamt-Brutto, Gesamt-Netto
-- [ ] 5.1.4 Log-Karte zeigt: Status-Badge, Dateiname, Timestamp, Erkannt/Fehler/Unklar
-- [ ] 5.1.5 Klick auf Log-Karte klappt Details auf/zu
-- [ ] 5.1.6 Status-Balken links: grün (Erfolg), gelb (Teilweise), rot (Fehler)
+- [x ] 5.1.1 Logs werden nach Monaten gruppiert angezeigt
+- [ x] 5.1.2 Aktueller Monat ist aufgeklappt, ältere Monate eingeklappt
+- [ x] 5.1.3 Monats-Header zeigt: Anzahl Verarbeitungen, Gesamt-Brutto, Gesamt-Netto
+- [ x] 5.1.4 Log-Karte zeigt: Status-Badge, Dateiname, Timestamp, Erkannt/Fehler/Unklar
+- [ x] 5.1.5 Klick auf Log-Karte klappt Details auf/zu
+- [ x] 5.1.6 Status-Balken links: grün (Erfolg), gelb (Teilweise), rot (Fehler)
 
 ### 5.2 Detail-Ansicht
-- [ ] 5.2.1 Zahlungsübersicht zeigt alle Zahlungspositionen (Empfänger, Betrag, Fälligkeit)
-- [ ] 5.2.2 Seiten-Tabelle zeigt alle Seiten mit Status, Mitarbeiter, Brutto, Netto
-- [ ] 5.2.3 Übersprungene Seiten (Zahlungsübersicht) werden grau angezeigt
-- [ ] 5.2.4 Zugeordnete Seiten werden grün angezeigt
-- [ ] 5.2.5 Unklare Seiten werden gelb angezeigt
+- [ x] 5.2.1 Zahlungsübersicht zeigt alle Zahlungspositionen (Empfänger, Betrag, Fälligkeit)
+- [ x] 5.2.2 Seiten-Tabelle zeigt alle Seiten mit Status, Mitarbeiter, Brutto, Netto
+- [ x] 5.2.3 Übersprungene Seiten (Zahlungsübersicht) werden grau angezeigt
+- [ x] 5.2.4 Zugeordnete Seiten werden grün angezeigt
+- [ x] 5.2.5 Unklare Seiten werden gelb angezeigt
 
 ### 5.3 Zahlungs-Tracking (wenn aktiviert)
-- [ ] 5.3.1 Checkboxen erscheinen in der Zahlungsübersicht
-- [ ] 5.3.2 Checkbox anklicken markiert Position als bezahlt (Zeile wird durchgestrichen)
-- [ ] 5.3.3 Status bleibt nach Seiten-Reload erhalten (Firestore-Persistenz)
-- [ ] 5.3.4 Wenn Zahlungs-Tracking deaktiviert: keine Checkboxen sichtbar
+- [ x] 5.3.1 Checkboxen erscheinen in der Zahlungsübersicht
+- [ x] 5.3.2 Checkbox anklicken markiert Position als bezahlt (Zeile wird durchgestrichen)
+- [ x] 5.3.3 Status bleibt nach Seiten-Reload erhalten (Firestore-Persistenz)
+- [ x] 5.3.4 Wenn Zahlungs-Tracking deaktiviert: keine Checkboxen sichtbar
 
 ### 5.4 Log-Verwaltung
-- [ ] 5.4.1 Einzelnen Log löschen (✕-Button) funktioniert mit Bestätigungsdialog
-- [ ] 5.4.2 "Alle Logs löschen" löscht alle Logs und Duplikat-Schutz
-- [ ] 5.4.3 Nach dem Löschen können E-Mails erneut verarbeitet werden
+- [ x] 5.4.1 Einzelnen Log löschen (✕-Button) funktioniert mit Bestätigungsdialog
+- [ x] 5.4.2 "Alle Logs löschen" löscht alle Logs und Duplikat-Schutz
+- [ x] 5.4.3 Nach dem Löschen können E-Mails erneut verarbeitet werden
 
 ---
 
