@@ -574,6 +574,11 @@ def register_customer(profil: LohnKundenProfil, user_token: dict = Depends(verif
         if refresh_token:
             token_result = msal_app.acquire_token_by_refresh_token(refresh_token, scopes=GRAPH_SCOPES)
             if not handle_token_error(token_result, profil.tenant_id, profil.mailbox_email):
+                # NEU: Refresh-Token rotation
+                new_refresh_token = token_result.get("refresh_token")
+                if new_refresh_token and new_refresh_token != refresh_token:
+                    pf_ref.update({"m365_refresh_token": encrypt_data(new_refresh_token)})
+
                 erfolg = setup_m365_webhook(profil.tenant_id, profil.mailbox_email, token_result["access_token"], profil.ziel_ordner)
                 if erfolg:
                     return {"status": "success", "message": "Konfiguration erfolgreich gespeichert!"}
@@ -618,6 +623,14 @@ def renew_webhooks(api_key_check: None = Depends(verify_api_key)):
                 if handle_token_error(token_result, tenant_id, pf_doc.id):
                     errors += 1
                     continue
+
+                # NEU: Falls Microsoft einen neuen Refresh Token geliefert hat, speichern!
+                new_refresh_token = token_result.get("refresh_token")
+                if new_refresh_token and new_refresh_token != refresh_token:
+                    db.collection("lohn_kunden").document(tenant_id).collection("postfaecher").document(pf_doc.id).update({
+                        "m365_refresh_token": encrypt_data(new_refresh_token)
+                    })
+                    logger.info(f"🔄 Refresh-Token rotiert für {mask_email(pf_doc.id)}")
 
                 headers = {"Authorization": f"Bearer {token_result['access_token']}", "Content-Type": "application/json"}
                 new_expire = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -868,7 +881,7 @@ async def m365_webhook(request: Request):
         # Duplikat-Schutz
         mail_doc_ref = db.collection("lohn_processed_mails").document(message_id)
         if mail_doc_ref.get().exists:
-            log_with_fields(logging.INFO, "Mail bereits verarbeitet — übersprungen", event="duplicate_skipped")
+            log_with_fields(logging.INFO, "Mail bereits verarbeitet — übersprungen", event="duplicate_skipped", message_id=message_id)
             continue
 
         mail_doc_ref.set({"status": "processing", "received_at": firestore.SERVER_TIMESTAMP})
@@ -912,6 +925,14 @@ async def m365_webhook(request: Request):
 
         if "access_token" not in token_result:
             continue
+
+        # NEU: Refresh-Token rotation sichern
+        new_refresh_token = token_result.get("refresh_token")
+        if new_refresh_token and new_refresh_token != REFRESH_TOKEN:
+            db.collection("lohn_kunden").document(customer_tenant_id).collection("postfaecher").document(MAILBOX_EMAIL).update({
+                "m365_refresh_token": encrypt_data(new_refresh_token)
+            })
+            logger.info(f"🔄 Refresh-Token rotiert für {mask_email(MAILBOX_EMAIL)} (Webhook)")
 
         headers = {"Authorization": f"Bearer {token_result['access_token']}", "Content-Type": "application/json"}
 
@@ -967,12 +988,6 @@ async def m365_webhook(request: Request):
 
             if att_size > MAX_SIZE_BYTES:
                 log_with_fields(logging.WARNING, f"PDF zu groß: {att_filename}", event="pdf_too_large", size_mb=round(att_size / 1024 / 1024, 1))
-                send_notification_email(
-                    token_result["access_token"], MAILBOX_EMAIL,
-                    f"PDF zu groß: {att_filename}",
-                    f"Die Datei '{att_filename}' ({att_size / 1024 / 1024:.1f} MB) überschreitet das Limit von 25 MB und wurde nicht verarbeitet.",
-                    to_email=BENACHRICHTIGUNGS_EMAIL
-                )
                 continue
 
             log_with_fields(logging.INFO, f"PDF-Download gestartet: {att_filename}", event="pdf_download", size_mb=round(att_size / 1024 / 1024, 2))
@@ -984,14 +999,6 @@ async def m365_webhook(request: Request):
 
         if not pdf_found:
             log_with_fields(logging.WARNING, "Keine PDF-Anhänge gefunden", event="no_pdf_attachment")
-            if betreff_filter_match:
-                # Betreff hat gematcht aber keine PDF → Admin benachrichtigen
-                send_notification_email(
-                    token_result["access_token"], MAILBOX_EMAIL,
-                    "Kein PDF-Anhang",
-                    f"Eine E-Mail vom Steuerbüro wurde empfangen (Betreff: {mail_subject[:100]}), enthielt aber keinen PDF-Anhang.",
-                    to_email=BENACHRICHTIGUNGS_EMAIL
-                )
         elif pdf_base64 and filename:
             pdf_bytes = base64.b64decode(pdf_base64)
 
@@ -1001,13 +1008,6 @@ async def m365_webhook(request: Request):
 
             if not ist_lohnabrechnung:
                 log_with_fields(logging.WARNING, f"Gemini: '{filename}' ist keine Lohnabrechnung", event="gemini_precheck_rejected", datei=mask_filename(filename))
-                if betreff_filter_match:
-                    send_notification_email(
-                        token_result["access_token"], MAILBOX_EMAIL,
-                        f"Kein Lohnabrechnung-Dokument: {filename}",
-                        f"Die E-Mail vom Steuerbüro enthielt die Datei '{filename}', die von der KI nicht als Lohnabrechnung erkannt wurde. Bitte prüfen Sie die E-Mail manuell.",
-                        to_email=BENACHRICHTIGUNGS_EMAIL
-                    )
             else:
                 # Verarbeitungspipeline starten
                 await process_sammel_pdf(
@@ -1456,25 +1456,6 @@ def create_draft_email(access_token: str, user_email: str, to_email: str, subjec
         return None
 
 
-def send_notification_email(access_token: str, mailbox_email: str, subject: str, body: str, to_email: str | None = None):
-    """Sendet eine Info-/Fehler-Mail. Gesendet von mailbox_email, an to_email (oder mailbox_email falls leer)."""
-    recipient = to_email or mailbox_email
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-    payload = {
-        "message": {
-            "subject": f"[KI-Lohnabrechner] {subject}",
-            "body": {"contentType": "HTML", "content": body},
-            "toRecipients": [{"emailAddress": {"address": recipient}}]
-        },
-        "saveToSentItems": True
-    }
-    res = requests.post(f"https://graph.microsoft.com/v1.0/users/{mailbox_email}/sendMail", headers=headers, json=payload)
-    if res.status_code not in [200, 202]:
-        log_with_fields(logging.ERROR, "Benachrichtigungs-Mail fehlgeschlagen", event="notification_email_failed", status_code=res.status_code, empfaenger=mask_email(recipient))
-    else:
-        log_with_fields(logging.INFO, f"Benachrichtigungs-Mail gesendet: {subject}", event="notification_email_sent", empfaenger=mask_email(recipient), betreff=subject)
-
-
 # ==========================================
 # 📤 LEXOFFICE-CLIENT
 # ==========================================
@@ -1665,10 +1646,6 @@ async def process_sammel_pdf(
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception as e:
         log_with_fields(logging.ERROR, f"PDF nicht lesbar: {filename}", event="pdf_unreadable", datei=mask_filename(filename), fehler=str(e))
-        try:
-            send_notification_email(access_token, mailbox_email, "PDF nicht lesbar", f"Die Datei '{filename}' konnte nicht geöffnet werden: {e}", to_email=notif_email)
-        except Exception as mail_err:
-            log_with_fields(logging.ERROR, "Info-Mail fehlgeschlagen", event="notification_failed", fehler=str(mail_err))
         write_verarbeitungs_log(tenant_id, filename, 0, 0, 1, 0, "error", f"PDF nicht lesbar: {e}", [])
         return
 
@@ -1801,13 +1778,6 @@ async def process_sammel_pdf(
             if not upload_result:
                 fehler += 1
                 log_with_fields(logging.ERROR, f"OneDrive-Upload fehlgeschlagen: {mask_name(ma_name)}", event="onedrive_upload_failed", mitarbeiter=mask_name(ma_name))
-                try:
-                    send_notification_email(access_token, mailbox_email,
-                        f"OneDrive-Fehler: {ma_name}",
-                        f"Die Gehaltsabrechnung für {ma_name} konnte nicht in OneDrive abgelegt werden.",
-                        to_email=notif_email)
-                except Exception as mail_err:
-                    log_with_fields(logging.ERROR, "Fehler-Mail fehlgeschlagen", event="notification_failed", fehler=str(mail_err))
                 continue
 
             log_with_fields(logging.INFO, f"OneDrive OK: {mask_filename(pdf_filename)}", event="onedrive_upload_ok", mitarbeiter=mask_name(ma_name), ordner=ordner_pfad)
@@ -1839,14 +1809,7 @@ async def process_sammel_pdf(
             fehler += 1
 
     if unklar > 0:
-        try:
-            send_notification_email(access_token, mailbox_email,
-                f"{unklar} Abrechnung(en) nicht zugeordnet",
-                f"Bei der Verarbeitung von '{filename}' konnten {unklar} Seite(n) keinem Mitarbeiter zugeordnet werden. "
-                f"Die Dateien wurden unter /{onedrive_basispfad.strip('/')}/_Unklar abgelegt.",
-                to_email=notif_email)
-        except Exception as e:
-            log_with_fields(logging.ERROR, "Unklar-Benachrichtigung fehlgeschlagen", event="notification_failed", fehler=str(e))
+        pass
 
     doc.close()
 
