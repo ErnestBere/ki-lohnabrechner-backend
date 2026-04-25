@@ -810,6 +810,16 @@ def delete_all_logs(user_token: dict = Depends(verify_firebase_token)):
 
 
 # ==========================================
+# 🚨 TEST ENDPOINT FÜR LOG-ALERTS
+# ==========================================
+
+@app.get("/api/test-error")
+async def trigger_test_error():
+    """Gibt einen Fehler im Log aus, um Google Cloud Alerts zu testen."""
+    log_with_fields(logging.ERROR, "Dies ist ein manuell ausgelöster Test-Fehler für das Alert-System", event="test_alert_triggered")
+    return {"message": "Test-Fehler wurde im Log generiert. Bitte prüfe dein Postfach auf die Alert-E-Mail!"}
+
+# ==========================================
 # 📨 WEBHOOK: E-MAIL EMPFANG
 # ==========================================
 
