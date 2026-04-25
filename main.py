@@ -1539,8 +1539,12 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
             return res.json()
         return None
 
+    # Belegnummer generieren (Pflichtfeld bei Lexoffice, wir nehmen wieder den Dateinamen)
+    v_number = filename.replace(".pdf", "")
+
     voucher_payload = {
         "type": "purchaseinvoice",
+        "voucherNumber": v_number,
         "voucherDate": voucher_date,
         "dueDate": voucher_date,
         "totalGrossAmount": round(betrag, 2),
@@ -1562,21 +1566,23 @@ def upload_to_lexoffice(api_key: str, pdf_bytes: bytes, filename: str, brutto_be
             voucher_id = res.json().get("id")
             log_with_fields(logging.INFO, f"Lexoffice Voucher erstellt: {mask_filename(filename)}", event="lexoffice_voucher_created", datei=mask_filename(filename), voucher_id=voucher_id)
 
-            # PDF an den Voucher anhängen
+            # PDF an den Voucher anhängen (Dateiname für Lexoffice bereinigen: keine Leerzeichen/Sonderzeichen)
+            safe_filename = re.sub(r"[^a-zA-Z0-9._-]", "_", filename)
             upload_headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-            files = {"file": (filename, pdf_bytes, "application/pdf")}
+            files = {"file": (safe_filename, pdf_bytes, "application/pdf")}
             file_res = requests.post(f"https://api.lexware.io/v1/vouchers/{voucher_id}/files", headers=upload_headers, files=files)
+            
             if file_res.status_code in [200, 201, 202]:
                 log_with_fields(logging.INFO, f"Lexoffice PDF angehängt: {mask_filename(filename)}", event="lexoffice_pdf_attached", voucher_id=voucher_id)
             else:
-                log_with_fields(logging.WARNING, f"Lexoffice PDF-Anhang fehlgeschlagen", event="lexoffice_pdf_attach_failed", status_code=file_res.status_code, voucher_id=voucher_id)
+                log_with_fields(logging.WARNING, f"Lexoffice PDF-Anhang fehlgeschlagen: {file_res.status_code}", event="lexoffice_pdf_attach_failed", status_code=file_res.status_code, response=file_res.text[:200], voucher_id=voucher_id)
 
             return res.json()
         elif res.status_code == 429:
             log_with_fields(logging.WARNING, f"Lexoffice Rate Limit — Warte 3s (Versuch {attempt + 1}/3)", event="lexoffice_rate_limit", attempt=attempt + 1)
             time.sleep(3)
         else:
-            log_with_fields(logging.ERROR, f"Lexoffice Voucher Fehler", event="lexoffice_voucher_failed", status_code=res.status_code, datei=mask_filename(filename))
+            log_with_fields(logging.ERROR, f"Lexoffice Voucher Fehler: {res.status_code}", event="lexoffice_voucher_failed", status_code=res.status_code, response=res.text[:200], datei=mask_filename(filename))
             return None
     return None
 
