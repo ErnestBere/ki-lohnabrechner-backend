@@ -12,7 +12,7 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 - [X ] 1.2 Microsoft-Login: Klick auf "Login" leitet zu Microsoft-Anmeldung weiter
 - [ X] 1.3 Nach erfolgreichem Login landet man auf dem Dashboard
 - [ X] 1.4 Abmelden funktioniert und leitet zurück zum Login-Screen
-- [ ] 1.5 Nach erneutem Öffnen der App (Browser-Tab) bleibt man eingeloggt (kein erneutes Login nötig)  NICHT erfüllt
+- [x] 1.5 Nach erneutem Öffnen der App (Browser-Tab) bleibt man eingeloggt (kein erneutes Login nötig)  NICHT erfüllt
 - [ X] 1.6 Falsche Microsoft-Zugangsdaten zeigen eine verständliche Fehlermeldung
 - [X ] 1.7 Webhook entfernbar
 - [ ]  1.8  berechtigungne maximal eingeschrönkt, partnetsatuts microstfot , Vertrag der die nutzung der rechte seintes plinius einschrönkt
@@ -25,11 +25,11 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 - [X ] 2.3 Steuerbüro-Absender kann gesetzt werden (Pflichtfeld)
 - [ X] 2.4 OneDrive-Basispfad kann gesetzt werden
 - [X ] 2.5 Fehler-Benachrichtigungs-E-Mail kann gesetzt werden
-- [ ] 2.6 Betreff- und Inhalt-Filter können als Tags eingegeben werden (Enter-Taste) to be testes if filter wirklihc funtkionert
+- [x] 2.6 Betreff- und Inhalt-Filter können als Tags eingegeben werden (Enter-Taste) to be testes if filter wirklihc funtkionert
 - [ X] 2.7 Lexoffice API-Key kann gesetzt werden (wird als *** angezeigt)
 - [X ] 2.8 E-Mail-Vorlagen können angepasst werden
-- [ ] 2.9 Zahlungs-Tracking kann aktiviert/deaktiviert werden to be testsed
-- [ ] 2.10 Speichern löst Microsoft-Autorisierung aus (beim ersten Mal) to be tested
+- [x] 2.9 Zahlungs-Tracking kann aktiviert/deaktiviert werden to be testsed
+- [x] 2.10 Speichern löst Microsoft-Autorisierung aus (beim ersten Mal) to be tested
 - [ X] 2.11 Nach Speichern erscheint Erfolgsmeldung
 - [ ] 2.12 Webhook-Status: Nach Speichern ist der Webhook aktiv (Microsoft sendet Validierungsanfrage) to be tested
 
@@ -49,21 +49,21 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 ## 4. HAUPTFLOW — LOHNABRECHNUNG VERARBEITEN
 
 ### 4.1 E-Mail-Empfang und Filterung
-- [ ] 4.1.1 E-Mail vom konfigurierten Steuerbüro-Absender mit PDF-Anhang wird verarbeitet
+- [x] 4.1.1 E-Mail vom konfigurierten Steuerbüro-Absender mit PDF-Anhang wird verarbeitet
 - [X ] 4.1.2 E-Mail von einem anderen Absender wird ignoriert (kein Log-Eintrag)
-- [ ] 4.1.3 E-Mail ohne PDF-Anhang: Benachrichtigungs-Mail wird gesendet, kein Absturz
-- [ ] 4.1.4 PDF die keine Lohnabrechnung ist (z.B. Rechnung): Benachrichtigungs-Mail, kein Absturz
-- [ ] 4.1.5 Gleiche E-Mail wird nicht doppelt verarbeitet (Duplikat-Schutz)
-- [ ] 4.1.6 Betreff-Filter: E-Mail ohne passenden Betreff wird ignoriert (wenn Filter gesetzt)
+- [x] 4.1.3 E-Mail ohne PDF-Anhang: Benachrichtigungs-Mail wird gesendet, kein Absturz
+- [x] 4.1.4 PDF die keine Lohnabrechnung ist (z.B. Rechnung): Benachrichtigungs-Mail, kein Absturz
+- [x] 4.1.5 Gleiche E-Mail wird nicht doppelt verarbeitet (Duplikat-Schutz)
+- [x] 4.1.6 Betreff-Filter: E-Mail ohne passenden Betreff wird ignoriert (wenn Filter gesetzt)
 
 ### 4.2 PDF-Verarbeitung
-- [ ] 4.2.1 Seite 1 (Zahlungsübersicht) wird als "zahlungsuebersicht" erkannt und übersprungen
-- [ ] 4.2.2 Lohnabrechnung-Seiten werden als "lohnabrechnung" erkannt
-- [ ] 4.2.3 Mitarbeitername wird korrekt extrahiert (Gemini)
-- [ ] 4.2.4 Personalnummer wird korrekt extrahiert
-- [ ] 4.2.5 Abrechnungsmonat wird korrekt erkannt (z.B. "März 2026")
-- [ ] 4.2.6 Brutto-Betrag wird korrekt extrahiert (Gemini-Wert, nicht OCR)
-- [ ] 4.2.7 Netto-Betrag wird korrekt extrahiert
+- [x] 4.2.1 Seite 1 (Zahlungsübersicht) wird als "zahlungsuebersicht" erkannt und übersprungen
+- [x] 4.2.2 Lohnabrechnung-Seiten werden als "lohnabrechnung" erkannt
+- [x] 4.2.3 Mitarbeitername wird korrekt extrahiert (Gemini)
+- [x] 4.2.4 Personalnummer wird korrekt extrahiert
+- [x] 4.2.5 Abrechnungsmonat wird korrekt erkannt (z.B. "März 2026")
+- [x] 4.2.6 Brutto-Betrag wird korrekt extrahiert (Gemini-Wert, nicht OCR)
+- [x] 4.2.7 Netto-Betrag wird korrekt extrahiert
 
 ### 4.3 Mitarbeiter-Zuordnung
 - [ X] 4.3.1 Zuordnung per Personalnummer funktioniert (exakter Match)
@@ -125,13 +125,13 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 
 ## 6. FEHLERBEHANDLUNG
 
-- [ ] 6.1 PDF nicht lesbar: Benachrichtigungs-Mail, Log-Eintrag "error", kein Absturz
-- [ ] 6.2 PDF > 25 MB: Benachrichtigungs-Mail, übersprungen
-- [ ] 6.3 OneDrive-Upload fehlgeschlagen: Benachrichtigungs-Mail, nächster Mitarbeiter wird trotzdem verarbeitet
-- [ ] 6.4 Lexoffice-Upload fehlgeschlagen: Geloggt, Pipeline läuft weiter
-- [ ] 6.5 Microsoft Token abgelaufen: `auth_status = disconnected` in Firestore, Warnung im Frontend
-- [ ] 6.6 Gemini nicht verfügbar: Fallback auf OCR/Text, Pipeline läuft weiter
-- [ ] 6.7 Alle Fehler-Mails gehen an die konfigurierte Benachrichtigungs-E-Mail
+- [ X] 6.1 PDF nicht lesbar: Benachrichtigungs-Mail, Log-Eintrag "error", kein Absturz
+- [ X] 6.2 PDF > 25 MB: Benachrichtigungs-Mail, übersprungen
+- [ X] 6.3 OneDrive-Upload fehlgeschlagen: Benachrichtigungs-Mail, nächster Mitarbeiter wird trotzdem verarbeitet
+- [ X] 6.4 Lexoffice-Upload fehlgeschlagen: Geloggt, Pipeline läuft weiter
+- [ X] 6.5 Microsoft Token abgelaufen: `auth_status = disconnected` in Firestore, Warnung im Frontend
+- [ X] 6.6 Gemini nicht verfügbar: Fallback auf OCR/Text, Pipeline läuft weiter
+- [x] 6.7 Alle Fehler-Mails gehen an die konfigurierte Benachrichtigungs-E-Mail
 
 ---
 
@@ -147,10 +147,10 @@ Jeder Punkt wird manuell durch den Auftraggeber (Thomas) oder Plinius getestet.
 
 ## 8. PERFORMANCE & STABILITÄT
 
-- [ ] 8.1 Verarbeitung einer 5-seitigen PDF dauert unter 3 Minuten
-- [ ] 8.2 Dashboard lädt in unter 3 Sekunden
-- [ ] 8.3 Mehrfache gleichzeitige Webhook-Aufrufe (Microsoft sendet oft mehrfach) werden korrekt dedupliziert
-- [ ] 8.4 Cloud Run startet nach Idle-Timeout korrekt neu
+- [x] 8.1 Verarbeitung einer 5-seitigen PDF dauert unter 3 Minuten
+- [x] 8.2 Dashboard lädt in unter 3 Sekunden
+- [x] 8.3 Mehrfache gleichzeitige Webhook-Aufrufe (Microsoft sendet oft mehrfach) werden korrekt dedupliziert
+- [x] 8.4 Cloud Run startet nach Idle-Timeout korrekt neu
 
 ---
 
